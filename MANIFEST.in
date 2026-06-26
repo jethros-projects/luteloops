@@ -1,0 +1,12 @@
+include LICENSE
+include NOTICE
+include README.md
+include AGENTS.md
+include lute
+include lute.yaml
+include test.sh
+include scripts/install.sh
+include scripts/uninstall.sh
+recursive-include luteloops *.md
+recursive-include contrib *
+recursive-include tests *.py

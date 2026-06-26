@@ -1,0 +1,172 @@
+"""Card parsing and summaries."""
+
+from __future__ import annotations
+
+import re
+import os
+import hashlib
+
+from .config import AnswerAuthority
+from .context import AppContext
+from .domain import Card, LoopSpec
+from .errors import Blocked, Gated
+from .events import EventBus, now_iso
+from .git_repo import GitRepo
+from .ledger import runs_since_authenticated_answer
+from .state_store import StateStore
+
+
+def summarize_card(lid: str, text: str) -> Card:
+    gated = bool(re.search(r"^READY", text, re.M))
+    kind = "ready" if gated else "blocked"
+    next_command = f"lute answer {lid} approve" if gated else f'lute answer {lid} "..."'
+    return Card(
+        loop=lid,
+        kind=kind,
+        answered="\nANSWER: " in text,
+        summary=(text.splitlines() or [""])[0],
+        next_command=next_command,
+    )
+
+
+def tail(text: str, n: int) -> str:
+    return "\n".join(text.splitlines()[-n:])
+
+
+def human(secs: float) -> str:
+    minutes, seconds = divmod(int(secs), 60)
+    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
+
+
+class CardService:
+    def __init__(
+        self,
+        ctx: AppContext,
+        store: StateStore,
+        git: GitRepo,
+        events: EventBus,
+        authority: AnswerAuthority,
+        ledger_entries,
+        ledger_append,
+        fire_halt,
+    ):
+        self.ctx = ctx
+        self.store = store
+        self.git = git
+        self.events = events
+        self.authority = authority
+        self.ledger_entries = ledger_entries
+        self.ledger_append = ledger_append
+        self.fire_halt = fire_halt
+
+    def path(self, loop_id: str) -> str:
+        return os.path.join(self.ctx.paths.inbox, f"{loop_id}.md")
+
+    def open_cards(self) -> list[dict[str, object]]:
+        self.store.ensure_dir(self.ctx.paths.inbox)
+        cards: list[dict[str, object]] = []
+        for name in sorted(os.listdir(self.ctx.paths.inbox)):
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(self.ctx.paths.inbox, name)
+            if not self.store.is_regular_file(path):
+                continue
+            with open(path, encoding="utf-8") as f:
+                card = summarize_card(name[:-3], f.read())
+            cards.append({
+                "lid": card.loop,
+                "gated": card.kind == "ready",
+                "answered": card.answered,
+                "summary": card.summary,
+                "next": card.next_command,
+            })
+        return cards
+
+    def consume_answer(self, loop: LoopSpec) -> str | None:
+        lid = str(loop.id)
+        path = self.path(lid)
+        if not self.store.is_regular_file(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        marker = text.rfind("\nANSWER: ")
+        if marker < 0:
+            return None
+        body = text[marker + len("\nANSWER: "):]
+        match = re.search(r"\nANSWER-AUTH: (\S+)\s*$", body)
+        answer = (body[:match.start()] if match else body).strip()
+        basis = hashlib.sha256(text[:marker].encode()).hexdigest()
+        genuine = bool(match) and self.authority.valid(lid, basis, match.group(1))
+        self.store.remove_runner_file(path)
+        if not genuine:
+            if self.git.ok("ls-files", "--error-unmatch", "--", path, cwd=self.ctx.shared_root):
+                self.git.shared_text(self.ctx.shared_root, "add", "-A", "--", path)
+                self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): card cleared")
+            return None
+        nonce = os.urandom(8).hex()
+        self.ledger_append({"ts": now_iso(), "loop": lid, "event": "answer", "n": nonce, "auth": self.authority.token(lid, nonce)})
+        self.git.shared_text(self.ctx.shared_root, "add", "--", self.ctx.paths.ledger)
+        if self.git.ok("ls-files", "--error-unmatch", "--", path, cwd=self.ctx.shared_root):
+            self.git.shared_text(self.ctx.shared_root, "add", "-A", "--", path)
+        self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): answer consumed")
+        return answer
+
+    def answer_card(self, loop_id: str, text: str) -> str | None:
+        path = self.path(loop_id)
+        if not self.store.is_regular_file(path):
+            have = sorted(f[:-3] for f in os.listdir(self.ctx.paths.inbox)) if os.path.isdir(self.ctx.paths.inbox) else []
+            return f"no escalation card at {path}" + (f"; open cards: {', '.join(have)}" if have else "; no open cards")
+        with open(path, "rb") as f:
+            basis = hashlib.sha256(f.read()).hexdigest()
+        token = self.authority.token(loop_id, basis)
+        self.store.append_text(path, f"\nANSWER: {text}\nANSWER-AUTH: {token}\n")
+        self.git.shared_text(self.ctx.shared_root, "add", path)
+        self.git.shared_text(self.ctx.shared_root, "commit", "-q", "-m", f"lute({loop_id}): answer")
+        return None
+
+    def escalate(self, loop: LoopSpec, tail_text: str, note: str = "") -> None:
+        lid = str(loop.id)
+        runs, secs = runs_since_authenticated_answer(self.ledger_entries(), lid, self.authority.token)
+        journal = os.path.join(self.ctx.paths.journal, f"{lid}.md")
+        jtail = tail(open(journal).read(), 5) if os.path.exists(journal) else "(no journal yet)"
+        text = (
+            f"BLOCKED: needs input after {runs} run{'s' if runs != 1 else ''} · {human(secs)}\n"
+            + (note + "\n" if note else "")
+            + f"Check: {loop.done_when.command}\n"
+            f"Last failure (tail):\n{tail(tail_text, 10)}\n"
+            f"Journal (last 5 lines):\n{jtail}\n"
+            f"→ One question, stated by the runner: what should change?\n"
+            f'Answer with: lute answer {lid} "..."\n'
+        )
+        self.store.safe_write_regular(self.path(lid), text)
+        self.git.shared_text(self.ctx.shared_root, "add", self.path(lid))
+        self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): escalate")
+        self.events.emit("escalated", lid, card=f"INBOX/{lid}.md")
+        self.fire_halt(lid, "blocked", self.path(lid))
+        raise Blocked()
+
+    def supersede(self, loop_id: str, approved: bool) -> None:
+        path = self.path(loop_id)
+        text = open(path).read() if self.store.is_regular_file(path) else ""
+        if (approved or "READY" in text) and "SUPERSEDED" not in text:
+            self.store.safe_write_regular(path, text + "SUPERSEDED: exam no longer passes\n")
+
+    def gate_halt(self, loop: LoopSpec) -> None:
+        lid = str(loop.id)
+        path = self.path(lid)
+        text = open(path).read() if self.store.is_regular_file(path) else ""
+        if not re.search(r"^READY", text, re.M):
+            diffstat = self.git.text("diff", "--stat", self.git.branch_base() + "...HEAD")
+            self.store.safe_write_regular(
+                path,
+                text + f"READY: exam passing, awaiting your approval\n"
+                f"Check: {loop.done_when.command}\n"
+                f"Diff:\n{diffstat}"
+                f"Approve: lute answer {lid} approve   (ANY answer approves and seals this state; "
+                f"to reject, change files and re-run without answering)\n",
+            )
+            self.git.shared_text(self.ctx.shared_root, "add", self.path(lid))
+            self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): gated")
+        self.events.emit("gated", lid, card=f"INBOX/{lid}.md")
+        self.fire_halt(lid, "gated", path)
+        raise Gated()

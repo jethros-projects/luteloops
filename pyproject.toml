@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luteloops"
+version = "0.1.0"
+description = "Turtles all the way down for AI coding agents. When done means done."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "jethros-projects" }]
+dependencies = ["PyYAML>=6"]
+keywords = ["agents", "automation", "cli", "testing"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Homepage = "https://github.com/jethros-projects/luteloops"
+Repository = "https://github.com/jethros-projects/luteloops"
+Issues = "https://github.com/jethros-projects/luteloops/issues"
+
+[project.scripts]
+lute = "lute_core.cli:main"
+
+[tool.setuptools]
+packages = ["lute_core", "luteloops"]
+
+[tool.setuptools.package-data]
+luteloops = ["*.md"]

@@ -1,0 +1,76 @@
+# lute.yaml - lute's own build loops (a luteloops file). lute is built the way
+# it runs: these exams decide doneness, not the builder. Children are the feature
+# families of spec §10–§11 and the release hardening milestones, in build order; the
+# root exam is the full suite.
+# `protected:` guards the exam's own materials, so a run can't pass by editing
+# the test instead of the runner - this replaces the old "never edit test.sh"
+# prose with the mechanism that enforces it. The build is sequential, not
+# `parallel:`, because every family can touch shared runner modules.
+loop: lute-initial-release
+agent: claude -p
+task: Keep the complete Lute initial release suite green. If every child exam
+  passes but the root exam fails, repair the integration gap without weakening
+  any test, protected check, or release contract.
+budget: 8h
+done_when: "./test.sh"
+protected: ["test.sh", "tests/**"]
+loops:
+  - loop: kernel
+    task: Build the runner core - the while-until-green loop, nesting, budgets,
+      confirm, the journal, escalation + answer durability, lint, and the
+      no-self-grade property. Spec §1–§9.
+    done_when: "./test.sh t1 t2 t3 t4 t5 t6 t7 t8 t9 t23"
+    protected: ["test.sh", "tests/**"]
+    budget: 60 runs
+  - loop: operability
+    task: Live capture and the read-only cockpit - per-run logs stream live, the
+      event stream is ordered, watch --snapshot and the noise filter render from
+      files alone, and --bg detaches into its own session.
+    done_when: "./test.sh t10 t11 t12 t13 t14"
+    protected: ["test.sh", "tests/**"]
+    budget: 30 runs
+  - loop: watchers
+    task: The not-yet verdict - a check may exit 75 to wait (check_every),
+      spending no run budget, with a time budget as the limit.
+    done_when: "./test.sh t15"
+    protected: ["test.sh", "tests/**"]
+    budget: 10 runs
+  - loop: safety
+    task: Truth and safety - gate:human approval (READY card, exit 4), the
+      container cage, and protected exam materials (a bought pass is voided).
+    done_when: "./test.sh t16 t17"
+    protected: ["test.sh", "tests/**"]
+    budget: 20 runs
+  - loop: parallel
+    task: Parallel siblings via worktrees - concurrent children merge back, a
+      conflict escalates without a broken commit, a crash resumes (stale git
+      locks cleared), slots isolate, and one run holds the repo lock.
+    done_when: "./test.sh t18 t19 t20 t21 t22 t24"
+    protected: ["test.sh", "tests/**"]
+    budget: 40 runs
+  - loop: planning-scheduling
+    task: Keep judge checks, custom cage wrapping, packaged planning, and cron
+      schedule compilation working as one authoring surface.
+    done_when: "./test.sh t25 t26 t27 t28"
+    protected: ["test.sh", "tests/**"]
+    budget: 25 runs
+  - loop: operator-ux
+    task: Keep the operator-facing surface honest - cold start, inbox/status,
+      one-shot runs, stop/on_halt, dry-run/help, guided errors, land, and
+      path-to-frontier polish.
+    done_when: "./test.sh t29 t30 t31 t32 t33 t34 t35 t36"
+    protected: ["test.sh", "tests/**"]
+    budget: 40 runs
+  - loop: red-team
+    task: Preserve the independent red-team guarantees against grader tamper,
+      config and manifest tamper, forged answers, path confusion, and parallel
+      gate or budget attacks.
+    done_when: "./test.sh t37 t38 t39 t40"
+    protected: ["test.sh", "tests/**"]
+    budget: 35 runs
+  - loop: release-integrity
+    task: Keep the extracted unit primitives, runner-owned ledger integrity, and
+      uninstall behavior aligned with the public release contract.
+    done_when: "./test.sh t41 t42 t43"
+    protected: ["test.sh", "tests/**"]
+    budget: 25 runs
