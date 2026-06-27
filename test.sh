@@ -1579,6 +1579,10 @@ t_t29() { # cold-start ergonomics: help/version, missing-file routing, clean-lin
   { [ "$rc" -eq 0 ] && grep -q 'lute 0.1.0' v.out; } || die "29a) --version: rc=$rc out=$(cat v.out)"
   rc=0; "$LUTE" run --help > rh.out 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "29a) 'run --help' exited $rc (should intercept, not die unknown-flag): $(cat rh.out)"
+  rc=0; "$LUTE" plan --help > ph.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "29a) 'plan --help' exited $rc (should intercept, not die unknown-flag): $(cat ph.out)"
+  grep -q -- '--dag' ph.out || die "29a) plan help does not mention --dag: $(cat ph.out)"
+  grep -q -- '--keep-dag' ph.out || die "29a) plan help does not mention --keep-dag: $(cat ph.out)"
 
   # --- b) a missing lute.yaml routes to init/plan, not "lint the file that isn't there"
   mkrepo "$WORK/t29b"
@@ -2727,8 +2731,78 @@ EOF
   grep -q 'kid.run1' q.out || die "44f) child quarantine not visible in shared state: $(cat q.out)"
 }
 
+# ---------------------------------------------------------------- T45
+t_t45() { # plan-dag: dependency planning prompt still emits native Lute YAML
+  # --- a) DAG mode repairs graph-shaped YAML into ordinary lute.proposed.yaml.
+  mkrepo "$WORK/t45a"
+  mkdir -p luteloops .lute
+  printf -- '---\nname: luteloops\n---\nDecompose the goal into nested loops; write valid Lute YAML.\n' > luteloops/SKILL.md
+  printf 'agent: %s\n' "$FAKE" > .lute/config.yaml
+  cat > playbook.json <<'EOF'
+{ "plan": {
+    "1": [ {"write": {"path": "lute.proposed.yaml",
+                      "content": "loop: daggy\ndepends_on: []\ntask: bad graph residue\ndone_when: \"true\"\nbudget: 3 runs\n"}},
+           {"journal": "run 1: wrote graph-shaped YAML by mistake."} ],
+    "2": [ {"write": {"path": "lute.proposed.yaml",
+                      "content": "loop: shipit\ntask: do the thing\ndone_when: \"true\"\nbudget: 3 runs\nloops:\n  - loop: prepare\n    task: prepare the ground\n    done_when: \"true\"\n    budget: 2 runs\n  - loop: build-surfaces\n    parallel: true\n    done_when: \"true\"\n    budget: 4 runs\n    loops:\n      - loop: api\n        task: build the API\n        done_when: \"true\"\n        budget: 2 runs\n      - loop: ui\n        task: build the UI\n        done_when: \"true\"\n        budget: 2 runs\n"}},
+           {"journal": "run 2: rewrote as native Lute YAML."} ] } }
+EOF
+  seal
+  rc=0; "$LUTE" plan --dag "ship the feature" > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "45a) plan --dag exited $rc, want 0: $(cat out.log)"
+  [ -f prompts/plan.run1.txt ] || die "45a) no plan prompt was captured"
+  grep -q 'DAG planning mode' prompts/plan.run1.txt || die "45a) prompt lacks DAG mode instructions"
+  grep -q 'ordinary Lute YAML' prompts/plan.run1.txt || die "45a) prompt does not require Lute-native output"
+  grep -q 'no depends_on, dag, nodes, or edges' prompts/plan.run1.txt \
+    || die "45a) prompt does not forbid DAG keys"
+  grep -q 'parallel: true only for direct sibling loops' prompts/plan.run1.txt \
+    || die "45a) prompt does not constrain parallelism"
+  [ -f prompts/plan.run2.txt ] || die "45a) invalid DAG-shaped first output did not trigger a repair run"
+  grep -q 'lute.proposed.yaml' prompts/plan.run2.txt || die "45a) repair prompt lacks the failing lint command"
+  grep -q 'dag plan closed' out.log || die "45a) dag plan success line missing: $(cat out.log)"
+  rc=0; "$LUTE" lint lute.proposed.yaml > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "45a) final proposed plan does not lint: $(cat lint.out)"
+  ! grep -Eq '(^|[[:space:]])(depends_on|dag|nodes|edges):' lute.proposed.yaml \
+    || die "45a) final proposed plan leaked DAG-only keys: $(cat lute.proposed.yaml)"
+
+  # --- b) --keep-dag also requires the review artifact, while the runtime contract stays proposed YAML.
+  mkrepo "$WORK/t45b"
+  mkdir -p luteloops .lute
+  printf -- '---\nname: luteloops\n---\nDecompose the goal into nested loops; write valid Lute YAML.\n' > luteloops/SKILL.md
+  printf 'agent: %s\n' "$FAKE" > .lute/config.yaml
+  cat > playbook.json <<'EOF'
+{ "plan": {
+    "1": [ {"write": {"path": "lute.proposed.yaml",
+                      "content": "loop: kept\ntask: do the kept plan\ndone_when: \"true\"\nbudget: 3 runs\n"}},
+           {"journal": "run 1: forgot the kept DAG artifact."} ],
+    "2": [ {"write": {"path": "lute.plan.yaml",
+                      "content": "nodes:\n  - id: prepare\n    depends_on: []\n  - id: finish\n    depends_on: [prepare]\nedges:\n  - prepare -> finish\n"}},
+           {"write": {"path": "lute.proposed.yaml",
+                      "content": "loop: kept\ntask: do the kept plan\ndone_when: \"true\"\nbudget: 3 runs\n"}},
+           {"journal": "run 2: wrote both plan artifacts."} ] } }
+EOF
+  seal
+  rc=0; "$LUTE" plan --dag --keep-dag "ship the feature" > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "45b) plan --dag --keep-dag exited $rc, want 0: $(cat out.log)"
+  [ -f prompts/plan.run2.txt ] || die "45b) missing lute.plan.yaml did not force a repair run"
+  [ -f lute.plan.yaml ] || die "45b) --keep-dag did not preserve lute.plan.yaml"
+  [ -f lute.proposed.yaml ] || die "45b) --keep-dag did not produce lute.proposed.yaml"
+  grep -q 'also write lute.plan.yaml' prompts/plan.run1.txt \
+    || die "45b) keep-dag prompt does not request the artifact"
+  grep -q 'lute.plan.yaml, then lute.proposed.yaml' out.log \
+    || die "45b) keep-dag success line does not mention both files: $(cat out.log)"
+  rc=0; "$LUTE" lint lute.proposed.yaml > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "45b) kept proposed plan does not lint: $(cat lint.out)"
+
+  # --- c) --keep-dag without --dag is a usage error before any agent is needed.
+  mkrepo "$WORK/t45c"
+  rc=0; "$LUTE" plan --keep-dag "ship the feature" > out.log 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "45c) --keep-dag without --dag exited 0"
+  grep -q -- '--keep-dag requires --dag' out.log || die "45c) error does not explain dependency: $(cat out.log)"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -2775,6 +2849,7 @@ desc() {
     t42) echo "ledger-integrity time budgets survive ledger truncation, rewrites, forged runs, answer replay; run numbers stay unique" ;;
     t43) echo "uninstall      removes installer-owned tool artifacts while preserving project state" ;;
     t44) echo "quarantine     trusted exam/control edits are quarantined, inspectable, and excluded from run commits" ;;
+    t45) echo "plan-dag       lute plan --dag reasons from dependencies but emits native lute.proposed.yaml; --keep-dag preserves the review artifact" ;;
   esac
 }
 
