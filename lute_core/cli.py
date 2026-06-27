@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import re
 import shlex
@@ -23,7 +24,7 @@ from .errors import Blocked, Gated, GitError, InternalError, LuteError, Precondi
 from .events import EventBus
 from .git_repo import GitRepo
 from .landing import land
-from .protection import protected_files
+from .protection import glob_re, protected_files
 from .runner import Runner, entrypoint_path, resolved_loop, self_cmd
 from .state_store import StateStore
 from .status import render_inbox, render_status
@@ -46,6 +47,7 @@ usage:
   lute status [file]           may execute checks for loops without open cards, print the loop hierarchy
   lute inbox                   list what's waiting on you (blocked/gated cards)
   lute answer <loop> "text"    reply to an escalation card in INBOX/
+  lute quarantine [list]       inspect quarantined trusted-exam edits
   lute plan "<goal>"           an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
 a check may exit 75 = "not yet": no agent wakes, no run budget spent; the loop
@@ -69,7 +71,11 @@ HELP = {
     "  --json      machine-readable snapshot from the same replay-only state.",
     "status": "lute status [file]: live status that may execute done_when/judge checks.\n"
     "  Use lute watch --snapshot for replay-only output from events.",
+    "quarantine": "lute quarantine [list|diff <id>|drop <id>|drop --all]: inspect or drop quarantined trusted-exam edits.\n"
+    "  list is read-only. diff prints the stored patch. drop removes stored quarantine records only.",
 }
+
+QID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def parse(args, flags, bools=()):
@@ -150,6 +156,41 @@ def load_manifest(path: str, *, run_message: bool = False):
     return root, schedules
 
 
+def quarantine_records(paths: Paths) -> list[dict]:
+    records: list[dict] = []
+    if not os.path.isdir(paths.quarantine):
+        return records
+    for name in sorted(os.listdir(paths.quarantine)):
+        if not QID_RE.fullmatch(name):
+            continue
+        qdir = os.path.join(paths.quarantine, name)
+        if not os.path.isdir(qdir):
+            continue
+        path = os.path.join(qdir, "meta.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                record = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        qid = str(record.get("id") or name)
+        if not QID_RE.fullmatch(qid):
+            continue
+        record["id"] = qid
+        record["_meta"] = path
+        record["_dir"] = qdir
+        record["_patch"] = os.path.join(qdir, "changes.patch")
+        records.append(record)
+    return records
+
+
+def require_quarantine_id(qid: str) -> str:
+    if not QID_RE.fullmatch(qid):
+        raise UsageError(f"invalid quarantine id {qid!r}")
+    return qid
+
+
 def resolvable(command: str) -> bool:
     try:
         parts = shlex.split(command)
@@ -158,6 +199,60 @@ def resolvable(command: str) -> bool:
     while parts and re.match(r"[A-Za-z_]\w*=", parts[0]):
         parts.pop(0)
     return bool(parts) and bool(shutil.which(parts[0]))
+
+
+def repo_rel(path: str) -> str | None:
+    rel = os.path.relpath(os.path.abspath(path))
+    if rel == "." or rel == ".." or rel.startswith(".." + os.sep):
+        return None
+    return rel.replace(os.sep, "/")
+
+
+def protected_covers(path: str, globs: list[str]) -> bool:
+    return any(glob_re(pattern).match(path) for pattern in globs)
+
+
+def local_check_paths(command: str) -> list[str]:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return []
+    while parts and re.match(r"[A-Za-z_]\w*=", parts[0]):
+        parts.pop(0)
+    if not parts or parts[0].startswith("judge:"):
+        return []
+
+    def existing_file(token: str) -> str | None:
+        token = token.rstrip(";")
+        if token.startswith("-") or token == "--":
+            return None
+        if token.startswith("./") or "/" in token or os.path.exists(token):
+            rel = repo_rel(token)
+            if rel and os.path.exists(rel) and not os.path.isdir(rel):
+                return rel
+        return None
+
+    cmd, rest = parts[0], parts[1:]
+    candidates: list[str] = []
+    if cmd in {"sh", "bash", "dash", "zsh", "python", "python3", "node", "ruby", "perl"}:
+        for token in rest:
+            if token == "-c":
+                break
+            found = existing_file(token)
+            if found:
+                candidates.append(found)
+                break
+    elif cmd == "make":
+        if os.path.exists("Makefile"):
+            candidates.append("Makefile")
+    elif cmd in {"npm", "pnpm", "yarn"}:
+        if os.path.exists("package.json"):
+            candidates.append("package.json")
+    else:
+        found = existing_file(cmd)
+        if found:
+            candidates.append(found)
+    return sorted(set(candidates))
 
 
 def cmd_run(args: list[str]) -> int:
@@ -263,6 +358,9 @@ def cmd_lint(args: list[str]) -> int:
             for pattern in loop.protected:
                 if not protected_files([pattern]):
                     warnings.append(f"{loop.id}: protected glob {pattern!r} matches no files")
+            for check_path in local_check_paths(loop.done_when.command):
+                if not protected_covers(check_path, list(loop.protected)):
+                    warnings.append(f"{loop.id}: done_when invokes {check_path} but it is not covered by protected:")
             if loop.parallel and len(loop.children) < 2:
                 warnings.append(f"{loop.id}: parallel with fewer than 2 children runs nothing concurrently")
             if loop.done_when.command.startswith("judge:"):
@@ -350,6 +448,54 @@ def cmd_answer(args: list[str]) -> int:
         raise UsageError(error)
     print(f"answer recorded: the next run of {pos[0]} injects it and refreshes its budget once (to change it first, edit or delete {runner.cards.path(pos[0])})")
     return 0
+
+
+def cmd_quarantine(args: list[str]) -> int:
+    pos, opts = parse(args, set(), {"--all"})
+    git = GitRepo.discover()
+    paths = Paths.for_repo(git.root, os.environ.get("LUTE_STATE_DIR"))
+    records = quarantine_records(paths)
+    verb = pos[0] if pos else "list"
+    if verb == "list":
+        need_pos(pos, "usage: lute quarantine [list|diff <id>|drop <id>|drop --all]", 0, 1)
+        if not records:
+            print("quarantine: empty")
+            return 0
+        for record in records:
+            paths_text = ", ".join(record.get("paths") or [])
+            count = len(record.get("paths") or [])
+            print(f"{record['id']}  {record.get('loop', '')} {record.get('run', '')}  {count} file(s)  {paths_text}")
+        return 0
+    if verb == "diff":
+        need_pos(pos, "usage: lute quarantine diff <id>", 2, 2)
+        qid = require_quarantine_id(pos[1])
+        record = next((r for r in records if r["id"] == qid), None)
+        if not record:
+            raise UsageError(f"no quarantine record {qid}")
+        try:
+            with open(record["_patch"], encoding="utf-8", errors="replace") as f:
+                sys.stdout.write(f.read())
+        except OSError as exc:
+            raise PreconditionError(f"quarantine patch missing for {qid}") from exc
+        return 0
+    if verb == "drop":
+        if opts.get("all") and len(pos) == 1:
+            for record in records:
+                if record.get("_dir"):
+                    shutil.rmtree(record["_dir"], ignore_errors=True)
+            print(f"dropped {len(records)} quarantine record(s)")
+            return 0
+        if opts.get("all"):
+            raise UsageError("usage: lute quarantine drop <id|--all>")
+        need_pos(pos, "usage: lute quarantine drop <id|--all>", 2, 2)
+        qid = require_quarantine_id(pos[1])
+        record = next((r for r in records if r["id"] == qid), None)
+        if not record:
+            raise UsageError(f"no quarantine record {qid}")
+        shutil.rmtree(record["_dir"], ignore_errors=True)
+        print(f"dropped quarantine {qid}")
+        return 0
+    raise UsageError("usage: lute quarantine [list|diff <id>|drop <id>|drop --all]")
 
 
 def cmd_status(args: list[str]) -> int:
@@ -471,6 +617,7 @@ def main(argv=None) -> int:
         "once": cmd_once,
         "stop": cmd_stop,
         "land": cmd_land,
+        "quarantine": cmd_quarantine,
     }
     if argv and argv[0] not in commands:
         near = difflib.get_close_matches(argv[0], commands, 1)
