@@ -78,6 +78,8 @@ class Runner:
             self.agents.fire_halt,
         )
         self._lock_registered = False
+        self.quarantine_notes: dict[str, list[str]] = {}
+        self.quarantine_paths: dict[str, set[str]] = {}
 
     def ledger_entries(self) -> list[dict]:
         return read_entries(self.ctx.paths.ledger)
@@ -104,6 +106,7 @@ class Runner:
             start = self.run_origin(str(root.id)) or start
         self.ensure_branch(str(root.id))
         self.ctx.run_pre_untracked = self.git.untracked()
+        self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
         self.store.ensure_layout()
         self.store.ensure_capture_ignore()
         self.seal_ignore(str(root.id))
@@ -122,6 +125,7 @@ class Runner:
         if self.git.status_porcelain("-uno").strip():
             self.git.text("reset", "-q", "--hard")
         self.ctx.run_pre_untracked = self.git.untracked()
+        self.ctx.trusted_base = self.git.branch_base()
         freeze_config(self.ctx, self.git)
         self.run_loop(target, agents_by_loop)
 
@@ -131,9 +135,9 @@ class Runner:
         answer = self.cards.consume_answer(loop)
         approved = bool(answer) and loop.gate == Gate.HUMAN
         waited = 0.0
-        protected_globs, grader_base, protected_base = self.protection.baseline(loop)
+        baseline = self.protection.baseline(loop)
         while passes < loop.confirm:
-            verdict, tail_text = self.administer_check(loop, protected_globs, protected_base, grader_base, passes)
+            verdict, tail_text = self.administer_check(loop, baseline, passes)
             if verdict == Verdict.PASS:
                 passes += 1
                 continue
@@ -146,7 +150,7 @@ class Runner:
                 approved = False
             if self.budget.spent(loop, waited):
                 self.cards.escalate(loop, tail_text)
-            self.run_agent_iteration(loop, agents_by_loop, tail_text, answer)
+            self.run_agent_iteration(loop, agents_by_loop, tail_text, answer, baseline)
             answer = None
         self.close_loop(loop, approved)
 
@@ -159,16 +163,27 @@ class Runner:
         for child in loop.children:
             self.run_loop(child, agents_by_loop)
 
-    def administer_check(self, loop: LoopSpec, protected_globs, protected_base, grader_base, passes: int) -> tuple[Verdict, str]:
+    def administer_check(self, loop: LoopSpec, baseline, passes: int) -> tuple[Verdict, str]:
+        loop_id = str(loop.id)
+        self.enforce_quarantine(loop, "precheck", baseline)
         result = self.checks.run(loop)
         verdict, tail_text = result.verdict, result.output
-        tampered = self.protection.tampered(protected_globs, protected_base, grader_base)
-        if tampered:
+        tampered = sorted(self.quarantine_paths.get(loop_id, set()))
+        postcheck = self.enforce_quarantine(loop, "postcheck", baseline)
+        if postcheck:
+            tampered = sorted(self.quarantine_paths.get(loop_id, set()))
             verdict = Verdict.FAIL
-            tail_text = "exam materials modified: " + ", ".join(tampered) + "; restore them; passes do not count while the exam is tampered"
+            tail_text = self.quarantine_message(loop_id)
+        elif verdict == Verdict.FAIL:
+            note = self.pop_quarantine_note(loop_id)
+            if note:
+                tail_text = note + ("\n" + tail_text if tail_text else "")
+        elif verdict == Verdict.PASS:
+            self.pop_quarantine_note(loop_id)
+            tampered = []
         self.events.emit(
             "check",
-            str(loop.id),
+            loop_id,
             verdict=verdict.value,
             **({"next": loop.every_str} if verdict == Verdict.NOT_YET else {}),
             **({"streak": f"{passes + 1}/{loop.confirm}"} if verdict == Verdict.PASS and loop.confirm > 1 else {}),
@@ -182,7 +197,7 @@ class Runner:
         time.sleep(loop.every)
         return waited + loop.every
 
-    def run_agent_iteration(self, loop: LoopSpec, agents_by_loop: dict[str, str | None], tail_text: str, answer: str | None) -> None:
+    def run_agent_iteration(self, loop: LoopSpec, agents_by_loop: dict[str, str | None], tail_text: str, answer: str | None, baseline) -> None:
         if self.budget.spent(loop):
             self.cards.escalate(loop, tail_text)
         if loop.task is None:
@@ -194,6 +209,8 @@ class Runner:
         self.store.ensure_layout()
         self.events.emit("agent_start", loop_id, run=run_number, log=rel_log, cap=self.budget.runs_cap(loop))
         agent_command = agents_by_loop.get(loop_id)
+        pre_agent_head = self.git.head()
+        expected_branch = self.git.current_branch()
         duration, returncode = self.agents.spawn(
             loop,
             agent_command or "",
@@ -201,15 +218,49 @@ class Runner:
             os.path.join(self.ctx.paths.logs, f"{loop_id}.run{run_number}.log"),
         )
         self.events.emit("agent_end", loop_id, run=run_number, exit=returncode, secs=duration)
+        current_branch = self.git.current_branch()
+        if current_branch != expected_branch:
+            self.git.force_branch(expected_branch, pre_agent_head)
+            self.git.text("checkout", "-q", "-f", expected_branch)
+            restore_if_changed(self.ctx.paths.state, self.ctx.paths.ledger, trusted)
+            self.cards.escalate(
+                loop,
+                f"agent left branch {expected_branch} on {current_branch}; runner restored {expected_branch}",
+            )
+        self.git.rewind_commits_keep_worktree(pre_agent_head)
         restore_if_changed(self.ctx.paths.state, self.ctx.paths.ledger, trusted)
+        self.enforce_quarantine(loop, f"run{run_number}", baseline)
         self.ledger_append({"ts": now_iso(), "loop": loop_id, "run": run_number, "duration": duration, "exit": returncode})
-        self.git.stage_run_work(self.ctx.run_pre_untracked)
+        self.git.stage_run_work(self.ctx.run_pre_untracked, self.ctx.quarantined_paths)
         self.git.commit(f"lute({loop_id}): run {run_number}", allow_empty=True)
+
+    def enforce_quarantine(self, loop: LoopSpec, run_id: str, baseline):
+        result = self.protection.enforce(str(loop.id), run_id, baseline)
+        if not result:
+            return None
+        patch = os.path.relpath(result.patch_path, self.ctx.repo_root)
+        self.events.emit("quarantine", str(loop.id), run=run_id, id=result.qid, paths=list(result.paths), patch=patch, restored=True)
+        self.ctx.quarantined_paths.update(result.paths)
+        self.quarantine_paths.setdefault(str(loop.id), set()).update(result.paths)
+        self.quarantine_notes.setdefault(str(loop.id), []).append(
+            f"Trusted exam edits were quarantined and restored before this check: {result.qid} ("
+            + ", ".join(result.paths)
+            + f"). Inspect with: lute quarantine diff {result.qid}"
+        )
+        return result
+
+    def quarantine_message(self, loop_id: str) -> str:
+        return self.pop_quarantine_note(loop_id) or "exam materials modified and quarantined; trusted exam files were restored before checking"
+
+    def pop_quarantine_note(self, loop_id: str) -> str:
+        notes = self.quarantine_notes.pop(loop_id, [])
+        self.quarantine_paths.pop(loop_id, None)
+        return "\n".join(notes)
 
     def close_loop(self, loop: LoopSpec, approved: bool) -> None:
         if loop.gate == Gate.HUMAN and not approved:
             self.cards.gate_halt(loop)
-        if self.git.stage_run_work(self.ctx.run_pre_untracked):
+        if self.git.stage_run_work(self.ctx.run_pre_untracked, self.ctx.quarantined_paths):
             self.git.commit(f"lute({loop.id}): close")
         self.events.emit("loop_closed", str(loop.id))
 

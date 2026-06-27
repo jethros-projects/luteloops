@@ -68,7 +68,8 @@ def drop_worktree(runner, child: LoopSpec) -> None:
 
 
 def spawn_child(runner, child: LoopSpec, worktree: str, slot: int):
-    env = dict(os.environ, LUTE_STATE_DIR=runner.ctx.paths.state, LUTE_SLOT=str(slot))
+    trusted_base = runner.ctx.trusted_base or runner.git.branch_base()
+    env = dict(os.environ, LUTE_STATE_DIR=runner.ctx.paths.state, LUTE_SLOT=str(slot), LUTE_TRUSTED_BASE=trusted_base)
     cmd = [*self_argv(), "run", str(child.id), "--plain", "--file", runner.ctx.manifest_path]
     marker = cmd[2] if len(cmd) > 2 and cmd[1] == "-m" else cmd[1]
     runner.store.ensure_layout()
@@ -91,13 +92,34 @@ def join_children(procs):
 
 def merge_all(runner, parent: LoopSpec, results) -> None:
     merged: list[str] = []
+    baseline = runner.protection.baseline(parent)
     for child, _ in results:
+        trusted_changes = runner.protection.changed_paths_at_ref(baseline, child_branch(runner, child))
+        if trusted_changes:
+            trusted_merge_escalate(runner, parent, child, trusted_changes)
         result = runner.git.merge("--no-edit", child_branch(runner, child), check=False)
         if result.returncode:
             conflicts = runner.git.text("diff", "--name-only", "--diff-filter=U").split()
             runner.git.ok("merge", "--abort")
             merge_escalate(runner, parent, child, merged, conflicts)
         merged.append(str(child.id))
+
+
+def trusted_merge_escalate(runner, parent: LoopSpec, child: LoopSpec, paths: list[str]) -> None:
+    lid = str(parent.id)
+    text = (
+        f"BLOCKED: parallel child {child.id} modified trusted exam/control material\n"
+        f"Quarantined by child or refused before merge: {', '.join(paths)}\n"
+        f"The parent branch was left clean; inspect child quarantine records with `lute quarantine list`.\n"
+        f"Resolve: make exam changes explicitly as reviewed work, or remove them from the child branch and re-run.\n"
+    )
+    path = runner.cards.path(lid)
+    runner.store.safe_write_regular(path, text)
+    runner.git.shared_text(runner.ctx.shared_root, "add", path)
+    runner.git.shared_text(runner.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): trusted merge blocked")
+    runner.events.emit("escalated", lid, card=f"INBOX/{lid}.md", trusted=paths)
+    runner.agents.fire_halt(lid, "blocked", path)
+    raise Blocked()
 
 
 def merge_escalate(runner, parent: LoopSpec, child: LoopSpec, merged: list[str], conflicts: list[str]) -> None:

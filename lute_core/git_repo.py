@@ -71,6 +71,16 @@ class GitRepo:
     def untracked(self, cwd: str | None = None) -> set[str]:
         return {line[3:] for line in self.status_porcelain(cwd=cwd).splitlines() if line.startswith("?? ")}
 
+    def reset_index(self, cwd: str | None = None) -> None:
+        self.text("reset", "-q", cwd=cwd)
+
+    def rewind_commits_keep_worktree(self, ref: str, cwd: str | None = None) -> bool:
+        if self.head(cwd=cwd) == ref:
+            self.reset_index(cwd=cwd)
+            return False
+        self.reset_mixed(ref, cwd=cwd)
+        return True
+
     def run_commit_count(self, loop_id: str, cwd: str | None = None) -> int:
         return sum(
             1
@@ -89,6 +99,10 @@ class GitRepo:
     def show_bytes(self, ref_path: str, cwd: str | None = None) -> bytes | None:
         result = subprocess.run(["git", "-C", cwd or self.root, "show", ref_path], capture_output=True)
         return result.stdout if result.returncode == 0 else None
+
+    def show_text(self, ref_path: str, cwd: str | None = None) -> str | None:
+        raw = self.show_bytes(ref_path, cwd=cwd)
+        return raw.decode("utf-8", "replace") if raw is not None else None
 
     def ls_tree_files(self, ref: str, cwd: str | None = None) -> list[str]:
         out = self.text("ls-tree", "-r", "--name-only", ref, cwd=cwd)
@@ -111,12 +125,42 @@ class GitRepo:
         else:
             self.text("checkout", "-q", "-b", branch)
 
-    def stage_run_work(self, pre_untracked: set[str]) -> bool:
-        self.text("add", "-u", "--", ".", ":(exclude)INBOX")
+    def stage_run_work(self, pre_untracked: set[str], exclude_paths: set[str] | None = None) -> bool:
+        exclude_paths = {path.strip("/") for path in (exclude_paths or set()) if path}
+
+        def excluded(path: str) -> bool:
+            path = path.strip("/")
+            return (
+                path == "INBOX"
+                or path.startswith("INBOX/")
+                or path == ".lute/quarantine"
+                or path.startswith(".lute/quarantine/")
+                or any(path == ex or path.startswith(ex + "/") for ex in exclude_paths)
+            )
+
+        self.reset_index()
+        excludes = [":(exclude)INBOX", ":(exclude).lute/quarantine"]
+        excludes.extend(f":(exclude){path}" for path in sorted(exclude_paths))
+        self.text("add", "-u", "--", ".", *excludes)
         for path in sorted(self.untracked() - pre_untracked):
-            if not path.startswith("INBOX/"):
+            if not excluded(path):
                 self.text("add", "--", path)
+        if exclude_paths:
+            self.ok("reset", "-q", "HEAD", "--", *sorted(exclude_paths))
         return bool(self.text("diff", "--cached", "--name-only").strip())
+
+    def reset_mixed(self, ref: str, cwd: str | None = None) -> None:
+        self.text("reset", "-q", "--mixed", ref, cwd=cwd)
+
+    def force_branch(self, branch: str, ref: str, cwd: str | None = None) -> None:
+        self.text("branch", "-f", branch, ref, cwd=cwd)
+
+    def restore_path(self, ref: str, path: str, cwd: str | None = None) -> bool:
+        return self.ok("checkout", "-q", ref, "--", path, cwd=cwd)
+
+    def restore_paths_from_ref(self, ref: str, paths: list[str], cwd: str | None = None) -> None:
+        if paths:
+            self.text("checkout", "-q", ref, "--", *paths, cwd=cwd)
 
     def commit(self, message: str, *, allow_empty: bool = False) -> None:
         args = ["commit", "-q"]
