@@ -33,6 +33,14 @@ loops:      ordered children
 
 Fixed semantics you must exploit instead of reinventing: **nesting = AND** (parent needs all children + own exam), **list order = sequence** (write B below A; never invent depends_on), **check-before-work = if** (a loop whose check already passes is skipped - to express "only do X when Y is false", write a loop whose done_when is Y). There is no if/else, no expressions, no hooks. If you feel the need for control flow, you are decomposing wrong (§3) or the logic belongs in a check (§4), a task, or an escalation.
 
+When invoked through `lute plan --dag`, use a workflow DAG only as a planning
+aid: identify checkable milestone nodes, prerequisite edges, fan-out/fan-in,
+and possible concurrency, then compile that reasoning into normal Lute YAML.
+The final `lute.proposed.yaml` must still contain only the grammar above -
+never `depends_on`, `dag`, `nodes`, `edges`, Mermaid, or Markdown plans. If
+`--keep-dag` is requested, you may also write `lute.plan.yaml` as a review
+artifact, but `lute.proposed.yaml` remains the only runtime contract.
+
 ## 3. The decomposition rule (the heart of this skill)
 
 **One loop per independently verifiable milestone. Decompose along verifiability boundaries, never along activity steps.**
@@ -92,13 +100,13 @@ A loop that closes on a judge is closed-ish. If it sits near anything irreversib
 
 **Gate any loop that immediately precedes an irreversible verb** (deploy, publish, send, migrate): the gate guards readiness, the next loop performs the act - list order does the rest.
 
-**Mark a parent `parallel: true` only when its children touch disjoint files/resources** (independent services, separate modules) and each takes real time - they run at once in separate worktrees and merge back, so an overlap is a real merge conflict that escalates, not auto-resolves. Make the parent's own `done_when` the integration check that verifies the merged result (there is no per-child re-check after merge), and use `LUTE_SLOT` in children's checks to keep ports/scratch paths from colliding.
+**Mark a parent `parallel: true` only when its children touch disjoint files/resources** (independent services, separate modules) and each takes real time - they run at once in separate worktrees and merge back, so an overlap is a real merge conflict that escalates, not auto-resolves. A DAG with independent-looking nodes is not enough; the children must be direct siblings, share no required files/resources, and have a parent `done_when` integration check that verifies the merged result (there is no per-child re-check after merge). Use `LUTE_SLOT` in children's checks to keep ports/scratch paths from colliding.
 
 Every loop gets a budget. Sizing defaults: mechanical edits 3 runs; type/test fixing 10–15; open-ended work 20 runs plus a time cap. The root always carries a time cap as the global fuse. Add `confirm: 2` to any exam known or likely to be flaky (integration suites, anything with timing, every judge).
 
 ## 7. Anti-patterns (reject these in your own drafts and in reviews)
 
-Vague exams ("works correctly", "is done"). Circular exams (§4). Activity decomposition ("research" / "implement" as loops). Logic smuggling (any urge for if/else/depends_on - use order, check-before-work, shell booleans, or move the branching into the task where the agent's intelligence handles it). Loops without budgets. Oversized loops (>15 expected runs). Judges for greppable facts. Noisy exams. A root whose exam is weaker than the user's stated goal.
+Vague exams ("works correctly", "is done"). Circular exams (§4). Activity decomposition ("research" / "implement" as loops). Logic smuggling (any urge for if/else/depends_on - use order, check-before-work, shell booleans, or move the branching into the task where the agent's intelligence handles it). DAG leakage in final YAML (`depends_on:`, `dag:`, `nodes:`, `edges:`, Mermaid, or Markdown instead of loops). Parallelizing conceptual dependencies without disjoint files/resources and a parent integration exam. Loops without budgets. Oversized loops (>15 expected runs). Judges for greppable facts. Noisy exams. A root whose exam is weaker than the user's stated goal.
 
 ## 8. Worked examples
 

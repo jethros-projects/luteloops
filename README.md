@@ -57,6 +57,11 @@ mv lute.proposed.yaml lute.yaml
 lute run
 ```
 
+For dependency-heavy jobs, `lute plan --dag "..."` asks the planner to reason
+from a workflow dependency graph first, while still writing ordinary
+`lute.proposed.yaml`. Add `--keep-dag` if you want the intermediate
+`lute.plan.yaml` review artifact too.
+
 `lute plan` uses the packaged luteloops skill. Run `lute init --skill` only
 when you want a local copy to inspect or customize.
 
@@ -206,6 +211,21 @@ when the work gets larger. If the job can be decomposed into independently
 checkable milestones, you can keep nesting the same primitive and let each
 child loop close under its own proof.
 
+## DAG Planning, Lute Output
+
+`lute plan --dag "<goal>"` is an authoring aid for complicated plans. The
+planner first identifies checkable milestones and prerequisite edges, then
+compiles that reasoning back into normal Lute YAML: list order for sequence,
+nesting for integration, shell checks for conditions, and `parallel: true` only
+for independent direct siblings with disjoint files/resources.
+
+The final `lute.proposed.yaml` never gains `depends_on`, `dag`, `nodes`,
+`edges`, or a graph scheduler. It is the same contract as a hand-written
+`lute.yaml`: children close first, the parent proves the merged result, and the
+root exam proves the whole goal. Use `--keep-dag` when you want to inspect the
+planner's `lute.plan.yaml`; Lute still runs only the compiled proposal after
+you review and rename it.
+
 ## The Commands
 
 | verb | what it does |
@@ -221,7 +241,7 @@ child loop close under its own proof.
 | `lute quarantine [list|diff <id>|drop <id>|drop --all]` | inspect or remove stored patches for trusted exam/control edits that Lute quarantined out of run commits |
 | `lute stop` | cleanly stop the active run (and any parallel children) in this repo |
 | `lute land [branch]` | merge `lute/<root>` into the start branch **only if the root exam still passes against the merged tree**; conflict or a failed re-check aborts clean and escalates (opt-in; the default is review-then-merge-yourself) |
-| `lute plan "<goal>"` | an agent reads the luteloops skill and drafts `lute.proposed.yaml`; you review and rename |
+| `lute plan [--dag] [--keep-dag] "<goal>"` | an agent reads the luteloops skill and drafts `lute.proposed.yaml`; `--dag` uses dependency planning first, and `--keep-dag` also writes `lute.plan.yaml` for review |
 
 Plus `lute cron sync` / `lute cron remove` for the `schedules:` manifest (below), and
 `lute --help` / `lute <verb> --help` / `lute --version`.
@@ -568,8 +588,9 @@ environment; make sure your agent CLI is on cron's `PATH`, and check
 
 The initial release is the small durable primitive: foreground, branch-only,
 fast-check-first (parallel siblings are opt-in per parent, but a lone loop still
-runs as one plain process). The verdict cache, cron-resumed ticks on an
-always-on box, merge gates, agent-resolved merge conflicts, registry, and cage
-network egress control are deliberately outside the initial release. They should
-enter only when a real loop fails without them, and only if they add no required
-fields.
+runs as one plain process). `lute plan --dag` does not add runtime DAG syntax,
+automatic graph scheduling, or a `depends_on` manifest key. The verdict cache,
+cron-resumed ticks on an always-on box, merge gates, agent-resolved merge
+conflicts, registry, and cage network egress control are deliberately outside
+the initial release. They should enter only when a real loop fails without them,
+and only if they add no required fields.
