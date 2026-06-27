@@ -11,6 +11,7 @@ Steps:
     {"write":  {"path": p, "content": c}}    overwrite a file
     {"append": {"path": p, "content": c}}    append to a file
     {"touch":  p}                            create empty file
+    {"delete": p}                            unlink a file if present
     {"sleep":  seconds}                      stall (T6 crash window, T10 live window)
     {"print":  "text"}                       write a line to stdout (T10 streaming)
     {"journal": "line"}                      append a line to this loop's journal
@@ -56,6 +57,11 @@ def run_steps(steps):
                 f.write(s["append"]["content"])
         elif "touch" in s:
             open(s["touch"], "a").close()
+        elif "delete" in s:
+            try:
+                os.remove(s["delete"])
+            except FileNotFoundError:
+                pass
         elif "sleep" in s:
             time.sleep(s["sleep"])
         elif "print" in s:

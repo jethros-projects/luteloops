@@ -3,10 +3,12 @@ import os
 import subprocess
 import tempfile
 import unittest
+import contextlib
+import io
 from pathlib import Path
 from unittest import mock
 
-from lute_core import cards, cli_args, events, ledger, processes, protection, schema
+from lute_core import cards, cli, cli_args, events, ledger, processes, protection, schema
 from lute_core.cage import CageTemplate, expand_cage_template
 from lute_core.context import AppContext, Paths
 from lute_core.domain import LoopSpec
@@ -190,6 +192,60 @@ class CliAndProtectionTests(unittest.TestCase):
                 Path(".lute/ignore.sh").write_text("x")
                 self.assertEqual(protection.protected_files(["*.sh"]), ["top.sh"])
                 self.assertIn("tests/.hidden/exam.sh", protection.protected_files(["tests/**"]))
+            finally:
+                os.chdir(old)
+
+    def test_quarantine_list_diff_and_drop(self):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                paths = Paths.for_repo(td)
+                os.makedirs(paths.quarantine)
+                q1 = Path(paths.quarantine, "q0001")
+                q1.mkdir()
+                Path(q1, "changes.patch").write_text(
+                    "diff --git a/tests/exam.sh b/tests/exam.sh\n"
+                    "--- a/tests/exam.sh\n"
+                    "+++ b/tests/exam.sh\n"
+                    "@@ -1 +1 @@\n"
+                    "-exit 1\n"
+                    "+exit 0\n"
+                )
+                Path(q1, "meta.json").write_text(json.dumps({
+                    "id": "q0001",
+                    "loop": "cheater",
+                    "run": "run2",
+                    "paths": ["tests/exam.sh"],
+                    "patch": "changes.patch",
+                }))
+
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(cli.cmd_quarantine([]), 0)
+                self.assertIn("q0001", out.getvalue())
+                self.assertIn("tests/exam.sh", out.getvalue())
+
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(cli.cmd_quarantine(["diff", "q0001"]), 0)
+                self.assertIn("+exit 0", out.getvalue())
+
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(cli.cmd_quarantine(["drop", "q0001"]), 0)
+                self.assertFalse(q1.exists())
+
+                for qid in ("q0002", "q0003"):
+                    qdir = Path(paths.quarantine, qid)
+                    qdir.mkdir()
+                    Path(qdir, "meta.json").write_text(json.dumps({"id": qid, "patch": "changes.patch"}))
+                    Path(qdir, "changes.patch").write_text("patch\n")
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(cli.cmd_quarantine(["drop", "--all"]), 0)
+                self.assertEqual(cli.quarantine_records(paths), [])
             finally:
                 os.chdir(old)
 

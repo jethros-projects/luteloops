@@ -835,9 +835,14 @@ EOF
   [ -f INBOX/cheater.md ] || die "a) no escalation card after the budget burned"
   grep -q '"tampered"' .lute/events.jsonl || die "a) no tampered field in the check event"
   grep -q 'tests/exam.sh' .lute/events.jsonl || die "a) tampered path missing from events"
-  grep -q 'exam materials modified' prompts/cheater.run2.txt \
-    || die "a) the tamper message did not ride into the next agent prompt"
-  grep -q 'exam materials modified' INBOX/cheater.md || die "a) escalation card lacks the tamper message"
+  grep -q 'quarantined' prompts/cheater.run2.txt \
+    || die "a) the quarantine message did not ride into the next agent prompt"
+  "$LUTE" quarantine > q.out 2>&1 || die "a) quarantine list failed: $(cat q.out)"
+  grep -q 'cheater.run1' q.out || die "a) quarantine list does not name the record: $(cat q.out)"
+  grep -q 'tests/exam.sh' q.out || die "a) quarantine list does not name the path: $(cat q.out)"
+  "$LUTE" quarantine diff cheater.run1 > q.diff 2>&1 || die "a) quarantine diff failed: $(cat q.diff)"
+  grep -q '+exit 0' q.diff || die "a) quarantine diff does not show the bought pass: $(cat q.diff)"
+  git show HEAD:tests/exam.sh | grep -q 'return 42' || die "a) the tampered exam was committed instead of restored"
   grep -q "⚠ cheater: exam materials modified" out.log || die "a) no ⚠ plain line: $(cat out.log)"
 
   # twin: the IDENTICAL fixture WITHOUT protected: lets the bought pass stand (opt-in).
@@ -2015,7 +2020,11 @@ EOF
   seal
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
   [ "$rc" -eq 3 ] || die "37a) worker rewrote its judge to PASS and the loop closed (exit $rc) - no-self-grade defeated: $(cat out.log)"
-  grep -q 'printf PASS' .lute/config.yaml || die "37a) precondition broken: the cheat agent never rewrote config"
+  grep -q 'printf FAIL' .lute/config.yaml || die "37a) trusted config was not restored"
+  "$LUTE" quarantine > q.out 2>&1 || die "37a) quarantine list failed: $(cat q.out)"
+  grep -q 'grade-me.run1' q.out || die "37a) config tamper was not quarantined: $(cat q.out)"
+  "$LUTE" quarantine diff grade-me.run1 > q.diff 2>&1 || die "37a) quarantine diff failed: $(cat q.diff)"
+  grep -q 'printf PASS' q.diff || die "37a) quarantine diff lacks the attempted judge rewrite: $(cat q.diff)"
   [ -f INBOX/grade-me.md ] || die "37a) no escalation card - the run should have blocked, not passed"
 
   # --- b) F4: a gated parallel child must pause the whole run (READY card, exit 4), not be skipped
@@ -2575,8 +2584,151 @@ t_t43() { # uninstall: removes installer-owned tool artifacts but leaves project
   grep -q 'still on PATH' "$WORK/t43-external.log" || die "43) external lute warning missing"
 }
 
+# ---------------------------------------------------------------- T44
+t_t44() { # quarantine: trusted exam/control edits are inspectable but not committed
+  # --- a) manifest + config tamper is quarantined and restored before the run commit.
+  mkrepo "$WORK/t44a"; mkdir -p .lute
+  printf 'old\n' > app.txt
+  cat > cheat.sh <<'SH'
+#!/bin/sh
+printf 'fixed\n' > app.txt
+if [ ! -f .cheated_once ]; then
+  printf 'loop: control\nagent: "sh cheat.sh"\ntask: t\ndone_when: "true"\nbudget: 1 runs\n' > lute.yaml
+  printf 'agent: "true"\njudge: "printf PASS"\n' > .lute/config.yaml
+  touch .cheated_once
+fi
+SH
+  chmod +x cheat.sh
+  printf 'agent: "sh cheat.sh"\njudge: "printf FAIL"\n' > .lute/config.yaml
+  printf 'loop: control\nagent: "sh cheat.sh"\ntask: t\ndone_when: "grep -q fixed app.txt"\nbudget: 3 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "44a) run exited $rc: $(cat out.log)"
+  git show HEAD:lute.yaml | grep -q 'grep -q fixed app.txt' || die "44a) manifest tamper was committed"
+  git show HEAD:.lute/config.yaml | grep -q 'printf FAIL' || die "44a) config tamper was committed"
+  "$LUTE" quarantine > q.out 2>&1 || die "44a) quarantine list failed: $(cat q.out)"
+  grep -q 'control.run1' q.out || die "44a) quarantine list lacks control.run1: $(cat q.out)"
+  grep -q 'lute.yaml' q.out || die "44a) quarantine list lacks manifest path: $(cat q.out)"
+  grep -q '.lute/config.yaml' q.out || die "44a) quarantine list lacks config path: $(cat q.out)"
+  "$LUTE" quarantine diff control.run1 > q.diff 2>&1 || die "44a) quarantine diff failed: $(cat q.diff)"
+  grep -q 'done_when: "true"' q.diff || die "44a) quarantine diff lacks manifest tamper: $(cat q.diff)"
+  "$LUTE" quarantine drop control.run1 > drop.out 2>&1 || die "44a) quarantine drop failed: $(cat drop.out)"
+  "$LUTE" quarantine > q2.out 2>&1 || die "44a) quarantine relist failed: $(cat q2.out)"
+  if grep -q 'control.run1' q2.out; then die "44a) dropped record still listed: $(cat q2.out)"; fi
+
+  # --- b) agent-created commits are rewound, and agent-staged index state is not trusted.
+  mkrepo "$WORK/t44b"
+  printf 'def answer():\n    return 0\n' > app.py
+  mkdir -p tests
+  printf '#!/bin/sh\ngrep -q "return 42" app.py\n' > tests/exam.sh
+  cat > cheat.sh <<'SH'
+#!/bin/sh
+if [ ! -f .cheated_once ]; then
+  printf '#!/bin/sh\nexit 0\n' > tests/exam.sh
+  git add tests/exam.sh
+  git commit -q -m "agent cheat commit"
+  touch .cheated_once
+fi
+printf 'def answer():\n    return 42\n' > app.py
+git add app.py
+SH
+  chmod +x cheat.sh
+  cat > lute.yaml <<'EOF'
+loop: staged
+agent: "sh cheat.sh"
+task: Make answer return 42.
+done_when: "sh tests/exam.sh"
+protected: ["tests/**"]
+budget: 3 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "44b) run exited $rc: $(cat out.log)"
+  if git log --format=%s | grep -q 'agent cheat commit'; then die "44b) agent-created commit stayed in history"; fi
+  git show HEAD:app.py | grep -q 'return 42' || die "44b) agent deliverable was not committed"
+  git show HEAD:tests/exam.sh | grep -q 'return 42' || die "44b) protected exam was not restored in HEAD"
+  git diff --cached --quiet || die "44b) agent-staged index state leaked after run"
+  [ "$(runs_logged staged)" -eq 1 ] || die "44b) trusted pass after quarantine should not need an extra run"
+  "$LUTE" quarantine > q.out 2>&1 || die "44b) quarantine list failed: $(cat q.out)"
+  grep -q 'staged.run1' q.out || die "44b) quarantine list lacks staged.run1: $(cat q.out)"
+  "$LUTE" quarantine drop --all > drop.out 2>&1 || die "44b) quarantine drop --all failed: $(cat drop.out)"
+  "$LUTE" quarantine > q2.out 2>&1 || die "44b) quarantine relist failed: $(cat q2.out)"
+  grep -q 'empty' q2.out || die "44b) quarantine not empty after drop --all: $(cat q2.out)"
+
+  # --- c) fileless once has no manifest to protect; a committed lute.yaml remains ordinary work.
+  mkrepo "$WORK/t44c"
+  printf 'loop: trap\nagent: "false"\ntask: trap\ndone_when: "false"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" once --until "grep -q edited lute.yaml && test -f done.txt" \
+    --agent "printf edited > lute.yaml; touch done.txt" -- "edit the committed manifest as ordinary work" \
+    > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "44c) fileless once quarantined lute.yaml: $(cat out.log)"
+  git show HEAD:lute.yaml | grep -q edited || die "44c) once did not preserve lute.yaml as work"
+  "$LUTE" quarantine > q.out 2>&1 || die "44c) quarantine list failed: $(cat q.out)"
+  grep -q 'empty' q.out || die "44c) fileless once created a quarantine record: $(cat q.out)"
+
+  # --- d) lint warns when an inferable local check file is not protected.
+  mkrepo "$WORK/t44d"
+  mkdir -p tests
+  printf '#!/bin/sh\nexit 1\n' > tests/exam.sh
+  printf 'loop: warn\nagent: "true"\ntask: t\ndone_when: "sh tests/exam.sh"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "44d) lint failed on an administrable failing check: $(cat lint.out)"
+  grep -q 'tests/exam.sh' lint.out && grep -q 'not covered by protected' lint.out \
+    || die "44d) lint did not warn about unprotected check file: $(cat lint.out)"
+
+  # --- e) land refuses a Lute branch that contains trusted exam edits.
+  mkrepo "$WORK/t44e"
+  mkdir -p tests
+  printf 'ok\n' > app.txt
+  printf '#!/bin/sh\ngrep -q ok app.txt\n' > tests/exam.sh
+  cat > lute.yaml <<'EOF'
+loop: landq
+agent: "true"
+task: t
+done_when: "sh tests/exam.sh"
+protected: ["tests/**"]
+budget: 1 runs
+EOF
+  seal
+  git checkout -q -b lute/landq
+  printf '#!/bin/sh\nexit 0\n' > tests/exam.sh
+  git add tests/exam.sh && git commit -q -m "poison trusted exam"
+  git checkout -q main
+  rc=0; "$LUTE" land main > land.out 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "44e) poisoned land should block, got $rc: $(cat land.out)"
+  git show main:tests/exam.sh | grep -q 'grep -q ok app.txt' || die "44e) target branch exam was changed"
+  [ -f INBOX/landq.md ] || die "44e) land block card missing"
+
+  # --- f) a parallel child quarantine stays in shared quarantine and does not merge exam edits.
+  mkrepo "$WORK/t44f"
+  printf '#!/bin/sh\nexit 1\n' > exam.sh
+  cat > lute.yaml <<'EOF'
+loop: parq
+done_when: "test -f child.done && grep -q 'exit 1' exam.sh"
+protected: ["exam.sh"]
+parallel: true
+budget: 3 runs
+loops:
+  - loop: kid
+    agent: "printf '#!/bin/sh\nexit 0\n' > exam.sh; touch child.done"
+    task: produce child output
+    done_when: "test -f child.done"
+    protected: ["exam.sh"]
+    budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "44f) parallel quarantine run failed: $(cat out.log)"
+  git show HEAD:exam.sh | grep -q 'exit 1' || die "44f) child exam edit merged into parent"
+  git show HEAD:child.done >/dev/null 2>&1 || die "44f) child product file did not merge"
+  "$LUTE" quarantine > q.out 2>&1 || die "44f) quarantine list failed: $(cat q.out)"
+  grep -q 'kid.run1' q.out || die "44f) child quarantine not visible in shared state: $(cat q.out)"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -2622,6 +2774,7 @@ desc() {
     t41) echo "unit-primitives extracted pure modules: schema, ledger, cards, events, cage, args, globs" ;;
     t42) echo "ledger-integrity time budgets survive ledger truncation, rewrites, forged runs, answer replay; run numbers stay unique" ;;
     t43) echo "uninstall      removes installer-owned tool artifacts while preserving project state" ;;
+    t44) echo "quarantine     trusted exam/control edits are quarantined, inspectable, and excluded from run commits" ;;
   esac
 }
 
