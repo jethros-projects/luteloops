@@ -6,38 +6,48 @@ This repo uses `lute`: loops that run an agent repeatedly until a
 machine-checkable `done_when` passes. Loops nest; a parent closes only
 when its children have closed and its own check passes.
 
-When asked to write, review, or repair a luteloops file (`lute.yaml`, at
-the repo root), or to turn any goal into loops, explore the repo first,
-then read and follow the canonical luteloops skill before answering:
-`luteloops/SKILL.md`.
+When asked to write, review, or repair a luteloops file (`lute.yaml` or
+`lute.proposed.yaml`), turn a concrete goal into loops, or use
+`lute plan --dag`, inspect the minimal repo facts needed to make exams
+runnable and non-circular: package/CI commands, existing tests/check scripts,
+target paths, and files that should be protected. Then read and follow the
+canonical luteloops skill before answering: `luteloops/SKILL.md`.
 
-Compressed index of its rules, in case the skill is not loaded:
-one loop per independently verifiable milestone - decompose along
-verifiability boundaries, never activity steps; if you can't name a
-milestone's exam, fold it into the parent's task. Nesting means AND,
-list order means sequence, check-before-work means if; there is no
-if/else, depends_on, or expression language - condition logic lives in
-shell inside `done_when`. A check may exit 75 = not yet: the runner
-re-asks every `check_every`, wakes no agent, and spends no run budget
-(time budgets keep ticking - give watchers one). `gate: human` pauses a
-passing loop for approval: READY card, exit 4, sealed by
-`lute answer <loop> approve` (re-verified once at seal). Pair `protected:`
-(globs) with any exam whose own materials the task could edit; Lute quarantines
-attempted edits under `.lute/quarantine/<id>/`, restores trusted copies before
-checking/committing, and exposes them with `lute quarantine diff <id>`, so a
-run cannot buy a pass by deleting the question; the optional container `cage:` (config)
-isolates the filesystem and host secrets for every agent and judge spawn. A
-parent may set `parallel: true` to run its children at once, each in its own git
-worktree, merged back as each closes - only when they touch disjoint files; the
-parent's own exam is the integration check, and a real merge conflict escalates
-(exit 3) rather than being auto-resolved.
-Compile English into exit codes (existence →
-build/types → tests → thresholds → judge last). Exams must be runnable
-now, terse in output, and must measure the goal, not the agent's
-obedience (no circular exams). `judge:` checks require a rubric with
-itemized citations, a model different from the worker, and `confirm: 2`.
-Every loop gets a budget; the root carries a global time cap.
-Runner-owned state under `.lute/` and `INBOX/` is not normal agent work product;
-lute repairs its directories and trusted write paths, and loops should measure
-repository outcomes rather than edits to runner state. A draft is not done until
-`lute lint` passes its dry-run of every exam.
+If `luteloops/SKILL.md` can be read, it is authoritative; this index is only a
+fallback checklist.
+
+Non-negotiables:
+- one loop per independently verifiable milestone; decompose along
+  verifiability boundaries, never activity steps
+- nesting means AND, list order means sequence, check-before-work means if
+- there is no if/else, runtime `depends_on`, or expression language; condition
+  logic lives in shell inside `done_when`
+- `lute plan --dag` may use a workflow DAG as planner scratch, and
+  `--keep-dag` must write `lute.plan.yaml`, but the runnable manifest stays
+  normal Lute YAML with no `depends_on`, `dag`, `nodes`, `edges`, Mermaid,
+  Markdown plans, or prose plans in place of loops
+- `protected:` covers exam materials the task could edit; quarantined edits
+  land under `.lute/quarantine/<id>/` and can be inspected with
+  `lute quarantine diff <id>`
+- `gate: human` pauses a passing loop for approval; irreversible next steps
+  should be gated
+- set `parallel: true` only on a parent whose direct child loops touch
+  disjoint files/resources; the parent must have its own integration
+  `done_when`
+- `cage:` is runner config in `.lute/config.yaml`, not loop YAML; it isolates
+  filesystem and host secrets for agent and judge commands, while
+  `done_when` checks stay host-side
+- exit 75 means not yet; the runner re-checks on `check_every`, wakes no agent,
+  and spends no run budget, so watcher loops need time budgets
+- `judge:` checks require a rubric with itemized citations, a model different
+  from the worker, and `confirm: 2`
+- every loop gets a budget; the root carries a global time cap
+
+Validation:
+Compile English into exit codes (existence -> build/types -> tests ->
+thresholds -> judge last). Exams must be runnable now, terse in output, and
+measure the goal rather than obedience. Runner-owned state under `.lute/` and
+`INBOX/` is not normal agent work product; loops should measure repository
+outcomes rather than edits to runner state. A draft is not done until
+you run `lute lint`, review its warnings, and it passes its dry-run of every
+exam.
