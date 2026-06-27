@@ -20,6 +20,7 @@ class Paths:
     inbox: str
     lock: str
     worktrees: str
+    quarantine: str
 
     @classmethod
     def for_repo(cls, repo: str, state_dir: str | None = None) -> "Paths":
@@ -36,6 +37,7 @@ class Paths:
             inbox=os.path.join(os.path.dirname(state), "INBOX"),
             lock=os.path.join(state, "lock"),
             worktrees=os.path.join(state, "wt"),
+            quarantine=os.path.join(state, "quarantine"),
         )
 
 
@@ -52,6 +54,8 @@ class AppContext:
     frozen_config: dict[str, Any] | None = None
     cage_template: str | None = None
     nagged: dict[str, bool] = field(default_factory=dict)
+    trusted_base: str = ""
+    quarantined_paths: set[str] = field(default_factory=set)
 
     @property
     def shared_root(self) -> str:

@@ -218,6 +218,7 @@ child loop close under its own proof.
 | `lute status [file]` | re-run each check once and print the loop hierarchy: ✔ done / ↻ running / ⏳ waiting / ✗ blocked / ✋ gated, plus cumulative agent time |
 | `lute inbox` | list every blocked/gated loop with the exact command to answer it |
 | `lute answer <loop> "..."` | reply to a card in `INBOX/`; the next run injects it and refreshes that loop's run budget once |
+| `lute quarantine [list|diff <id>|drop <id>|drop --all]` | inspect or remove stored patches for trusted exam/control edits that Lute quarantined out of run commits |
 | `lute stop` | cleanly stop the active run (and any parallel children) in this repo |
 | `lute land [branch]` | merge `lute/<root>` into the start branch **only if the root exam still passes against the merged tree**; conflict or a failed re-check aborts clean and escalates (opt-in; the default is review-then-merge-yourself) |
 | `lute plan "<goal>"` | an agent reads the luteloops skill and drafts `lute.proposed.yaml`; you review and rename |
@@ -235,7 +236,7 @@ Plus `lute cron sync` / `lute cron remove` for the `schedules:` manifest (below)
 | Journals | Keep short memory across fresh agent processes |
 | Confirm streaks | Require multiple consecutive passes for flaky checks |
 | `gate: human` | Pause before deploy, publish, migrate, send, or other irreversible steps |
-| `protected:` | Prevent a pass bought by editing or deleting the exam materials |
+| `protected:` | Quarantine edits to exam materials before they can buy a pass or enter the run commit |
 | `cage:` | Run model-facing commands in a container with explicit mounts |
 | `parallel: true` | Run independent child loops in separate worktrees, then integrate |
 | `watch --json` | Stable machine-readable status for wrappers, cron, dashboards, and scripts |
@@ -498,19 +499,27 @@ budget: 20 runs
 ```
 
 Lute compares those globs to their committed originals at the branch base.
-Before each check it re-hashes the current tree; a pass counts only if the
-matched set and every hash are unchanged; a modified, deleted, or newly-added
-matching file all void it. A voided pass becomes a **fail** whose output (`exam
-materials modified: <paths>; restore them …`) rides into the next agent prompt
-like any other failure, so the agent is told to undo its cheat and the budget
-burns toward escalation normally if it won't. There is **no auto-revert**
-(untracked scripts can't be restored from git, and a mis-aimed glob must never
-destroy work): the *agent* must put the exam back. The guard converts only
-*passes*; ordinary failures flow unchanged, and `done_when` still runs
-host-side (the examiner is trusted; this protects the exam's *materials*). It
-is opt-in, per loop, and the author decides what counts as the exam: **protect
-the exam's materials whenever the task might be tempted to edit them.** `lute
-lint` warns when a `protected:` glob matches nothing.
+Before and after checks, and after each agent run, it re-hashes the watched
+materials plus trusted control files (the active manifest, whether `lute.yaml`
+or `--file`, and `.lute/config.yaml`). If an agent modifies, deletes, or newly adds a watched file,
+Lute saves the attempted edit under `.lute/quarantine/<id>/`, restores the
+trusted copy, and leaves the quarantined edit out of the normal run commit. The
+next prompt names the quarantine record so the agent can fix the actual work
+instead of redefining the exam. Inspect records with:
+
+```sh
+lute quarantine
+lute quarantine diff <id>
+lute quarantine drop <id>     # or: lute quarantine drop --all
+```
+
+The guard is opt-in per loop for `protected:` exam materials, while the active
+manifest and config file are trusted control inputs. `lute once` is fileless, so
+a committed `lute.yaml` is ordinary work there unless it is also listed under
+`protected:`. `done_when` checks still run host-side; this protects the exam's
+materials and control inputs from model-facing commands. `lute lint` warns when
+a `protected:` glob matches nothing and when an inferable local check file is not
+covered by `protected:`.
 
 ## The cage (`cage:`)
 

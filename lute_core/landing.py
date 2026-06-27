@@ -44,6 +44,16 @@ def land(
     try:
         git.text("checkout", "-q", target)
         pre = git.head()
+        trusted_base = git.text("merge-base", target, branch).strip()
+        runner.ctx.trusted_base = trusted_base
+        baseline = runner.protection.baseline(root)
+        branch_trusted_changes = runner.protection.changed_paths_at_ref(baseline, branch)
+        if branch_trusted_changes:
+            block(
+                f"{branch} modifies trusted exam/control material and was not landed: "
+                + ", ".join(branch_trusted_changes)
+                + ". Inspect quarantines with: lute quarantine list"
+            )
         merge = git.merge("--no-ff", "--no-edit", branch, check=False)
         if merge.returncode:
             git.ok("merge", "--abort")
@@ -51,7 +61,15 @@ def land(
             msg = (merge.stderr or merge.stdout).strip()
             last = msg.splitlines()[-1] if msg else "merge failed"
             block(f"landing {branch} into {target} could not complete; {target} left clean; resolve and re-run. git said: {last}")
+        q = runner.enforce_quarantine(root, "land-precheck", baseline)
+        if q:
+            git.text("reset", "-q", "--hard", pre)
+            block(f"trusted exam/control changes were quarantined during land as {q.qid}; {target} restored. Inspect: lute quarantine diff {q.qid}")
         verdict = checks.run(root).verdict
+        q = runner.enforce_quarantine(root, "land-postcheck", baseline)
+        if q:
+            git.text("reset", "-q", "--hard", pre)
+            block(f"root exam modified trusted material during land; quarantined as {q.qid}; {target} restored. Inspect: lute quarantine diff {q.qid}")
         if verdict != Verdict.PASS:
             git.text("reset", "-q", "--hard", pre)
             block(f"root exam `{root.done_when.command}` fails against the merged tree. NOT landed ({target} restored); the branches integrate badly; fix on {branch} and re-run")

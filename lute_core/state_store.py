@@ -35,6 +35,7 @@ class StateStore:
         self.ensure_dir(self.paths.journal)
         self.ensure_dir(self.paths.inbox)
         self.ensure_dir(self.paths.worktrees)
+        self.ensure_dir(self.paths.quarantine)
         self.ensure_parent(self.paths.ledger)
         self.ensure_parent(self.paths.events)
         self.ensure_parent(self.paths.config)
@@ -151,7 +152,7 @@ class StateStore:
 
     def ensure_capture_ignore(self) -> None:
         ignore = os.path.join(self.paths.state, ".gitignore")
-        need = ("logs/", "events.jsonl", "wt/", "lock*")
+        need = ("logs/", "events.jsonl", "wt/", "quarantine/", "lock*")
         have = []
         if self.is_regular_file(ignore):
             with open(ignore, encoding="utf-8") as f:

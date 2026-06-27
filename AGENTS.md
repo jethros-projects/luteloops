@@ -22,8 +22,10 @@ re-asks every `check_every`, wakes no agent, and spends no run budget
 (time budgets keep ticking - give watchers one). `gate: human` pauses a
 passing loop for approval: READY card, exit 4, sealed by
 `lute answer <loop> approve` (re-verified once at seal). Pair `protected:`
-(globs) with any exam whose own materials the task could edit, so a run cannot
-buy a pass by deleting the question; the optional container `cage:` (config)
+(globs) with any exam whose own materials the task could edit; Lute quarantines
+attempted edits under `.lute/quarantine/<id>/`, restores trusted copies before
+checking/committing, and exposes them with `lute quarantine diff <id>`, so a
+run cannot buy a pass by deleting the question; the optional container `cage:` (config)
 isolates the filesystem and host secrets for every agent and judge spawn. A
 parent may set `parallel: true` to run its children at once, each in its own git
 worktree, merged back as each closes - only when they touch disjoint files; the

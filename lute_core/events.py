@@ -36,6 +36,14 @@ def output_line(line: str) -> None:
 
 def plain_line(event: dict[str, Any]) -> str | None:
     lid = event.get("loop", "")
+    paths = event.get("paths") or []
+    if event.get("ev") == "quarantine":
+        n = len(paths)
+        suffix = "s" if n != 1 else ""
+        return (
+            f"⚠ {lid}: quarantined trusted exam edit {event.get('id', '')} · "
+            f"{n} file{suffix} restored · inspect: lute quarantine diff {event.get('id', '')}"
+        )
     if event.get("tampered"):
         check = f"⚠ {lid}: exam materials modified: {len(event['tampered'])} file(s)"
     elif event.get("verdict") == "not_yet":
