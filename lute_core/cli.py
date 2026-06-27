@@ -48,7 +48,7 @@ usage:
   lute inbox                   list what's waiting on you (blocked/gated cards)
   lute answer <loop> "text"    reply to an escalation card in INBOX/
   lute quarantine [list]       inspect quarantined trusted-exam edits
-  lute plan "<goal>"           an agent drafts lute.proposed.yaml via the skill
+  lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
 a check may exit 75 = "not yet": no agent wakes, no run budget spent; the loop
 re-asks every check_every (default 60s) while any time budget keeps ticking
@@ -73,6 +73,9 @@ HELP = {
     "  Use lute watch --snapshot for replay-only output from events.",
     "quarantine": "lute quarantine [list|diff <id>|drop <id>|drop --all]: inspect or drop quarantined trusted-exam edits.\n"
     "  list is read-only. diff prints the stored patch. drop removes stored quarantine records only.",
+    "plan": 'lute plan [--dag] [--keep-dag] "<goal>": draft lute.proposed.yaml via the skill.\n'
+    "  --dag       ask the planner to reason from a workflow DAG, then emit normal Lute YAML\n"
+    "  --keep-dag  with --dag, also write lute.plan.yaml as a review/debug artifact.",
 }
 
 QID_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -312,26 +315,57 @@ def cmd_once(args: list[str]) -> int:
     return 0
 
 
+def dag_plan_instructions(keep_dag: bool) -> str:
+    keep = (
+        "\nBecause --keep-dag was passed, also write lute.plan.yaml as a review/debug artifact "
+        "showing the workflow DAG you used. lute.plan.yaml is not the runtime contract; "
+        "lute.proposed.yaml is."
+        if keep_dag
+        else "\nDo not write a separate DAG artifact unless explicitly asked; keep the dependency reasoning inside your planning process."
+    )
+    return (
+        "\n\nDAG planning mode:\n"
+        "- First derive a workflow DAG of independently verifiable milestones for the goal: nodes, prerequisite edges, and possible fan-out/fan-in.\n"
+        "- Use that DAG only as an authoring aid. The final file you write must be lute.proposed.yaml, and it must be ordinary Lute YAML.\n"
+        "- Do not put DAG-only keys in lute.proposed.yaml: no depends_on, dag, nodes, or edges.\n"
+        "- Compile dependencies into Lute-native structure: list order for sequence, nesting for AND/integration, done_when shell logic for conditions, and parallel: true only for direct sibling loops that touch disjoint files/resources.\n"
+        "- Any parallel parent must have its own done_when integration check for the merged result.\n"
+        f"{keep}"
+    )
+
+
 def cmd_plan(args: list[str]) -> int:
-    pos, opts = parse(args, {"--agent"})
+    pos, opts = parse(args, {"--agent"}, {"--dag", "--keep-dag"})
     if len(pos) != 1:
-        raise UsageError('usage: lute plan "<goal>"')
+        raise UsageError('usage: lute plan [--dag] [--keep-dag] "<goal>"')
+    if opts.get("keep-dag") and not opts.get("dag"):
+        raise UsageError("--keep-dag requires --dag")
     ctx, git, store, runner = make_runtime(root_id="plan", mode=RunMode.FILELESS, plain=True)
     source, body = load_skill_body()
     body = strip_skill_frontmatter(body)
     agent = opts.get("agent") or ctx.config.get("agent")
     if not agent:
         raise UsageError(f"no agent: pass --agent or set agent in {ctx.paths.config}")
+    dag_instructions = dag_plan_instructions(bool(opts.get("keep-dag"))) if opts.get("dag") else ""
+    check = f"{self_cmd()} lint lute.proposed.yaml"
+    if opts.get("keep-dag"):
+        check = f"test -f lute.plan.yaml && {check}"
     loop = LoopSpec(
         LoopId("plan"),
         f"Write lute.proposed.yaml for: {pos[0]}\n\n"
-        f"The luteloops skill from {source} follows. Obey it:\n\n{body.strip()}",
+        f"The luteloops skill from {source} follows. Obey it:\n\n{body.strip()}"
+        f"{dag_instructions}",
         agent,
-        CheckSpec(f"{self_cmd()} lint lute.proposed.yaml"),
+        CheckSpec(check),
         Budget.from_pairs([("runs", 10)]),
     )
     runner.run_toplevel(loop, {"plan": agent})
-    print("✔ plan closed: review lute.proposed.yaml and rename it to lute.yaml")
+    if opts.get("keep-dag"):
+        print("✔ dag plan closed: review lute.plan.yaml, then lute.proposed.yaml and rename it to lute.yaml")
+    elif opts.get("dag"):
+        print("✔ dag plan closed: review lute.proposed.yaml and rename it to lute.yaml")
+    else:
+        print("✔ plan closed: review lute.proposed.yaml and rename it to lute.yaml")
     return 0
 
 
