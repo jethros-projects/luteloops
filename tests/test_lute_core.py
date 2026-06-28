@@ -8,10 +8,11 @@ import io
 from pathlib import Path
 from unittest import mock
 
-from lute_core import cards, cli, cli_args, events, ledger, processes, protection, schema
+from lute_core import cards, cli, cli_args, events, ledger, planner, processes, protection, schema
 from lute_core.cage import CageTemplate, expand_cage_template
 from lute_core.context import AppContext, Paths
 from lute_core.domain import LoopSpec
+from lute_core.git_repo import GitRepo
 from lute_core.state_store import StateStore
 
 
@@ -248,6 +249,58 @@ class CliAndProtectionTests(unittest.TestCase):
                 self.assertEqual(cli.quarantine_records(paths), [])
             finally:
                 os.chdir(old)
+
+
+class PlannerPromptTests(unittest.TestCase):
+    def test_repo_briefing_collects_bounded_planning_facts(self):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                Path("pyproject.toml").write_text('[project]\nname = "demo"\nrequires-python = ">=3.10"\n')
+                Path("package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
+                Path("test.sh").write_text("#!/bin/sh\npytest -q\n")
+                Path("AGENTS.md").write_text("Protect tests when they define the exam.\n")
+                Path("src").mkdir()
+                Path("src/report_export.py").write_text("# implementation lives here\n")
+                Path("tests").mkdir()
+                Path("tests/test_report_export.py").write_text("# tests live here\n")
+
+                briefing = planner.repo_briefing("add report export", GitRepo(td))
+            finally:
+                os.chdir(old)
+
+        self.assertIn("# Repository Briefing", briefing)
+        self.assertIn("pyproject name: \"demo\"", briefing)
+        self.assertIn("npm run test: vitest run", briefing)
+        self.assertIn("./test.sh", briefing)
+        self.assertIn("tests/test_report_export.py", briefing)
+        self.assertIn("src/report_export.py", briefing)
+        self.assertIn("Protect tests when they define the exam.", briefing)
+
+    def test_build_plan_task_wraps_goal_context_and_guardrails(self):
+        task = planner.build_plan_task(
+            "ship the feature",
+            "luteloops/SKILL.md",
+            "Skill body",
+            "Repo facts",
+            "\nDAG planning mode:\n- no depends_on\n",
+        )
+
+        self.assertIn("<goal>\nship the feature\n</goal>", task)
+        self.assertIn("<repository_briefing>\nRepo facts\n</repository_briefing>", task)
+        self.assertIn("<luteloops_skill source=\"luteloops/SKILL.md\">", task)
+        self.assertIn("Do not change product code while planning", task)
+        self.assertIn("scouts inspect independent repo areas", task)
+        self.assertIn("workers draft bounded milestone/check proposals", task)
+        self.assertIn("Dispatch scouts for separate discovery questions", task)
+        self.assertIn("Dispatch workers only for independent planning slices", task)
+        self.assertIn("derive the implementation topology", task)
+        self.assertIn("functional milestones, not activities", task)
+        self.assertIn("loops that do not trace to functional necessity", task)
+        self.assertIn('done_when: "true"', task)
+        self.assertIn("DAG planning mode", task)
 
 
 class ContextTests(unittest.TestCase):

@@ -1491,17 +1491,32 @@ t_t27() { # plan: lute plan drives an agent to write lute.proposed.yaml and clos
   mkrepo "$WORK/t27"
   mkdir -p luteloops .lute
   printf -- '---\nname: luteloops\n---\nDecompose the goal into nested loops; write a valid lute.yaml.\n' > luteloops/SKILL.md
+  printf '{"scripts":{"test":"vitest run"}}\n' > package.json
+  mkdir -p tests src
+  printf '#!/bin/sh\nexit 1\n' > tests/export-check.sh
+  printf 'export code lives here\n' > src/export.txt
   printf 'agent: %s\n' "$FAKE" > .lute/config.yaml
   cat > playbook.json <<'EOF'
 { "plan": {
     "1": [ {"write": {"path": "lute.proposed.yaml",
                       "content": "loop: shipit\ntask: do the thing\ndone_when: \"true\"\nbudget: 3 runs\n"}},
+           {"write": {"path": "luteloops/SKILL.md",
+                      "content": "tampered skill should be quarantined\n"}},
            {"journal": "run 1: wrote the proposed plan."} ] } }
 EOF
   seal
-  rc=0; "$LUTE" plan "ship the feature" > out.log 2>&1 || rc=$?
+  rc=0; "$LUTE" plan "ship the export feature" > out.log 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "27) plan exited $rc, want 0: $(cat out.log)"
   [ -f lute.proposed.yaml ] || die "27) plan produced no lute.proposed.yaml: $(cat out.log)"
+  [ -f prompts/plan.run1.txt ] || die "27) no planner prompt was captured"
+  grep -q 'Repository Briefing' prompts/plan.run1.txt || die "27) prompt lacks repository briefing"
+  grep -q 'npm run test: vitest run' prompts/plan.run1.txt || die "27) prompt lacks package script facts"
+  grep -q 'tests/export-check.sh' prompts/plan.run1.txt || die "27) prompt lacks test/check path facts"
+  grep -q 'Do not change product code while planning' prompts/plan.run1.txt || die "27) prompt lacks output-scope guardrail"
+  grep -q 'done_when: "true"' prompts/plan.run1.txt || die "27) prompt lacks anti-placeholder guidance"
+  grep -q 'Decompose the goal' luteloops/SKILL.md || die "27) plan did not restore protected skill tamper"
+  "$LUTE" quarantine > q.out 2>&1 || die "27) quarantine list failed: $(cat q.out)"
+  grep -q 'luteloops/SKILL.md' q.out || die "27) protected skill tamper was not quarantined: $(cat q.out)"
   grep -q 'plan closed' out.log || die "27) plan did not report closure: $(cat out.log)"
   git rev-parse -q --verify lute/plan >/dev/null || die "27) plan branch lute/plan missing"
   rc=0; "$LUTE" lint lute.proposed.yaml > lint.out 2>&1 || rc=$?   # the produced plan must be administrable
