@@ -62,8 +62,11 @@ from a workflow dependency graph first, while still writing ordinary
 `lute.proposed.yaml`. Pass `--keep-dag` to also write the intermediate
 `lute.plan.yaml` review artifact.
 
-`lute plan` uses the packaged luteloops skill. Run `lute init --skill` only
-when you want a local copy to inspect or customize.
+`lute plan` builds a bounded repo briefing first: git status, detected
+build/test/CI signals, existing test/check files, path hints from the goal, and
+root `AGENTS.md` guidance. It then gives the agent that briefing plus the
+packaged luteloops skill. Run `lute init --skill` only when you want a local
+copy to inspect or customize.
 
 ## Install: One Paste
 
@@ -345,7 +348,8 @@ lute status   # ✔ done / ↻ in progress / ◌ untouched
 If a loop exhausts its budget you get `INBOX/<loop>.md` and exit code 3;
 reply with `lute answer fix-tests "the snapshot tests are obsolete; regenerate them"`
 and run again. Writing good loops is a skill, literally: see
-`luteloops/SKILL.md`, which `lute plan` injects into its drafting prompt.
+`luteloops/SKILL.md`, which `lute plan` injects into its drafting prompt after a
+bounded repo briefing.
 
 > **On cost:** `budget` caps *iterations* (`N runs`) and *wall-clock* (`48h`);
 > never tokens or dollars; lute can't see your agent's API spend. `lute status`

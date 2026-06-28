@@ -24,6 +24,7 @@ from .errors import Blocked, Gated, GitError, InternalError, LuteError, Precondi
 from .events import EventBus
 from .git_repo import GitRepo
 from .landing import land
+from .planner import build_plan_task, repo_briefing
 from .protection import glob_re, protected_files
 from .runner import Runner, entrypoint_path, resolved_loop, self_cmd
 from .state_store import StateStore
@@ -33,6 +34,7 @@ from .watch import render_filtered, render_json, render_snapshot
 VERSION = "lute 0.1.0"
 SKILL_PATH = "luteloops/SKILL.md"
 SKILLS = (SKILL_PATH,)
+PLAN_PROTECTED = ("lute", "lute_core/**", SKILL_PATH)
 
 USAGE = """\
 lute: a while-loop for agents
@@ -350,14 +352,14 @@ def cmd_plan(args: list[str]) -> int:
     check = f"{self_cmd()} lint lute.proposed.yaml"
     if opts.get("keep-dag"):
         check = f"test -f lute.plan.yaml && {check}"
+    task = build_plan_task(pos[0], source, body, repo_briefing(pos[0], git), dag_instructions)
     loop = LoopSpec(
-        LoopId("plan"),
-        f"Write lute.proposed.yaml for: {pos[0]}\n\n"
-        f"The luteloops skill from {source} follows. Obey it:\n\n{body.strip()}"
-        f"{dag_instructions}",
-        agent,
-        CheckSpec(check),
-        Budget.from_pairs([("runs", 10)]),
+        id=LoopId("plan"),
+        task=task,
+        agent=agent,
+        done_when=CheckSpec(check),
+        budget=Budget.from_pairs([("runs", 10)]),
+        protected=PLAN_PROTECTED,
     )
     runner.run_toplevel(loop, {"plan": agent})
     if opts.get("keep-dag"):
