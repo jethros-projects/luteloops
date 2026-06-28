@@ -59,8 +59,8 @@ lute run
 
 For dependency-heavy jobs, `lute plan --dag "..."` asks the planner to reason
 from a workflow dependency graph first, while still writing ordinary
-`lute.proposed.yaml`. Add `--keep-dag` if you want the intermediate
-`lute.plan.yaml` review artifact too.
+`lute.proposed.yaml`. Pass `--keep-dag` to also write the intermediate
+`lute.plan.yaml` review artifact.
 
 `lute plan` uses the packaged luteloops skill. Run `lute init --skill` only
 when you want a local copy to inspect or customize.
@@ -220,11 +220,11 @@ nesting for integration, shell checks for conditions, and `parallel: true` only
 for independent direct siblings with disjoint files/resources.
 
 The final `lute.proposed.yaml` never gains `depends_on`, `dag`, `nodes`,
-`edges`, or a graph scheduler. It is the same contract as a hand-written
-`lute.yaml`: children close first, the parent proves the merged result, and the
-root exam proves the whole goal. Use `--keep-dag` when you want to inspect the
-planner's `lute.plan.yaml`; Lute still runs only the compiled proposal after
-you review and rename it.
+`edges`, Mermaid, Markdown plans, or a graph scheduler. It is the same contract
+as a hand-written `lute.yaml`: children close first, the parent proves the
+merged result, and the root exam proves the whole goal. Use `--keep-dag` when
+you want to inspect the planner's `lute.plan.yaml` review artifact; Lute still
+runs only the compiled proposal after you review and rename it.
 
 ## The Commands
 
