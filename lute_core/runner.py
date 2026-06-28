@@ -101,18 +101,19 @@ class Runner:
 
     def run_toplevel(self, root: LoopSpec, agents_by_loop: dict[str, str | None]) -> None:
         self.acquire_lock()
-        start = self.git.current_branch()
-        if start.startswith("lute/"):
-            start = self.run_origin(str(root.id)) or start
-        self.ensure_branch(str(root.id))
-        self.ctx.run_pre_untracked = self.git.untracked()
-        self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
-        self.store.ensure_layout()
-        self.store.ensure_capture_ignore()
-        self.seal_ignore(str(root.id))
-        freeze_config(self.ctx, self.git)
-        self.events.emit("run_start", str(root.id), branch=f"lute/{root.id}", start=start)
         try:
+            start = self.git.current_branch()
+            if start.startswith("lute/"):
+                start = self.run_origin(str(root.id)) or start
+            self.ensure_branch(str(root.id))
+            self.ctx.run_pre_untracked = self.git.untracked()
+            self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
+            self.store.ensure_layout()
+            self.store.ensure_capture_ignore()
+            self.seal_ignore(str(root.id))
+            freeze_config(self.ctx, self.git)
+            self.require_human_authority_cage(root)
+            self.events.emit("run_start", str(root.id), branch=f"lute/{root.id}", start=start)
             self.run_loop(root, agents_by_loop)
         finally:
             self.release_lock()
@@ -127,7 +128,19 @@ class Runner:
         self.ctx.run_pre_untracked = self.git.untracked()
         self.ctx.trusted_base = self.git.branch_base()
         freeze_config(self.ctx, self.git)
+        self.require_human_authority_cage(target)
         self.run_loop(target, agents_by_loop)
+
+    def require_human_authority_cage(self, root: LoopSpec) -> None:
+        if self.ctx.active_config().get("cage"):
+            return
+        gated = [str(loop.id) for _, loop in root.flatten() if loop.gate == Gate.HUMAN]
+        if gated:
+            raise PreconditionError(
+                "gate: human requires cage in .lute/config.yaml for loop(s) "
+                + ", ".join(gated)
+                + "; uncaged agents run as your user and can read Lute's answer-auth key"
+            )
 
     def run_loop(self, loop: LoopSpec, agents_by_loop: dict[str, str | None]) -> None:
         self.run_children(loop, agents_by_loop)

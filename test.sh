@@ -1,6 +1,6 @@
 #!/bin/bash
 # test.sh - the exams (the canonical living suite; the ALL= line below is the source of truth for
-# the count). Kernel + every spec §11 notch (capture/cockpit/detach, not-yet, gate, cage + protected,
+# the count). Kernel + every spec §11 notch (capture/detach, not-yet, gate, cage + protected,
 # parallel + crash-recovery, answer durability, judge/cage-wrap/plan/cron) + the ease-of-use & red-team
 # surfaces. Hermetic: rigged fixture repos in a temp dir, scripted fake/shell agents, no LLM calls, no TTY.
 # Docker tests SKIP (with a printed reason) without a daemon; T18+ spawn real subprocesses.
@@ -690,6 +690,8 @@ EOF
 t_t16() { # gate: human - a passing gated loop pauses for a nod instead of closing
   mkfix() { # three loops in order: A normal, B gated (exam passes + counted), C after B
     mkrepo "$1"
+    mkdir -p .lute
+    printf 'cage: "sh -lc {cmd}"\n' > .lute/config.yaml
     cat > bcheck.sh <<'EOF'
 #!/bin/sh
 echo x >> exam_count
@@ -776,6 +778,8 @@ EOF
 
   # --- e) the stopped clock: a gate is attended; time budgets do not expire it
   mkrepo "$WORK/t16-e"
+  mkdir -p .lute
+  printf 'cage: "sh -lc {cmd}"\n' > .lute/config.yaml
   cat > lute.yaml <<EOF
 loop: gate-clock
 agent: "$FAKE"
@@ -793,17 +797,29 @@ EOF
   [ "$rc" -eq 4 ] || die "e) clock did not stop at the gate: exited $rc (3 = wrongly escalated)"
   grep -q '^READY' INBOX/gate-clock.md || die "e) card is not a READY card: $(cat INBOX/gate-clock.md)"
 
-  # --- f) lint: gate accepts exactly 'human'
+  # --- f) lint: gate accepts exactly 'human' and requires a cage
   mkrepo "$WORK/t16-f"
   printf 'loop: bad-gate\nagent: "true"\ntask: x\ndone_when: "true"\ngate: robot\nbudget: 2 runs\n' > lute.yaml
   seal
   rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
   [ "$rc" -ne 0 ] || die "f) gate: robot passed lint"
   grep -q "gate" lint.out || die "f) lint error does not mention gate: $(cat lint.out)"
+  rm -f lint.out
   printf 'loop: good-gate\nagent: "true"\ntask: x\ndone_when: "true"\ngate: human\nbudget: 2 runs\n' > lute.yaml
   git add -A && git commit -qm fixture2
   rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
-  [ "$rc" -eq 0 ] || die "f) gate: human failed lint: $(cat lint.out)"
+  [ "$rc" -ne 0 ] || die "f) gate: human without cage passed lint"
+  grep -q "requires cage" lint.out || die "f) uncaged gate error does not mention cage: $(cat lint.out)"
+  rm -f lint.out
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "f) gate: human without cage ran"
+  grep -q "requires cage" run.out || die "f) uncaged gate run error does not mention cage: $(cat run.out)"
+  rm -f run.out
+  mkdir -p .lute
+  printf 'cage: "sh -lc {cmd}"\n' > .lute/config.yaml
+  git add -A && git commit -qm fixture3
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "f) caged gate: human failed lint: $(cat lint.out)"
 }
 
 # ---------------------------------------------------------------- T17
@@ -1682,6 +1698,8 @@ t_t30() { # truth-telling: lute inbox lists what's waiting; status shows ✗/✋
 
   # --- c) a GATED loop: status must show ✋ (awaiting you), never ✔ - the old lie
   mkrepo "$WORK/t30c"
+  mkdir -p .lute
+  printf 'cage: "sh -lc {cmd}"\n' > .lute/config.yaml
   printf 'loop: shipit\nagent: "true"\ntask: t\ndone_when: "true"\ngate: human\nbudget: 2 runs\n' > lute.yaml
   seal
   rc=0; "$LUTE" run --plain > o.out 2>&1 || rc=$?
@@ -1824,6 +1842,7 @@ t_t33() { # preview & help: run --dry-run shows the plan + first prompt and spen
   grep -q 'one-shot, no file' oh.out || die "33b) once --help isn't once-specific: $(cat oh.out)"
   "$LUTE" lint --help > lh.out 2>&1 || die "33b) lint --help failed"
   grep -q 'while-loop for agents' lh.out || die "33b) lint --help didn't fall back to usage: $(cat lh.out)"
+  if "$LUTE" run --help 2>&1 | grep -qi cockpit; then die "33b) help still advertises a cockpit UI"; fi
 }
 
 # ---------------------------------------------------------------- T34
@@ -2048,6 +2067,8 @@ EOF
 
   # --- b) F4: a gated parallel child must pause the whole run (READY card, exit 4), not be skipped
   mkrepo "$WORK/t37b"
+  mkdir -p .lute
+  printf 'cage: "sh -lc {cmd}"\n' > .lute/config.yaml
   cat > lute.yaml <<'EOF'
 loop: par
 done_when: "test -f never-passes"

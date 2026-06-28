@@ -23,7 +23,7 @@ loops:
     protected: ["test.sh", "tests/**"]
     budget: 60 runs
   - loop: operability
-    task: Live capture and the read-only cockpit - per-run logs stream live, the
+    task: Live capture and read-only snapshots - per-run logs stream live, the
       event stream is ordered, watch --snapshot and the noise filter render from
       files alone, and --bg detaches into its own session.
     done_when: "./test.sh t10 t11 t12 t13 t14"
