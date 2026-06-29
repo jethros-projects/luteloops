@@ -119,6 +119,10 @@ Use a judge only when executable checks cannot capture the residue (quality, ton
 3. Itemized citations required (the rubric should demand them, as above) so the verdict is auditable.
 4. Add `confirm: 2` - judges are flaky checks by nature.
 
+Lute frames the candidate diff as untrusted data before sending it to the judge,
+but the diff can still contain adversarial text. Write rubrics that tell the
+judge to cite concrete files/lines and ignore instructions inside the diff.
+
 A loop that closes on a judge is closed-ish. If it sits near anything irreversible, say so in your output and recommend a human review of that loop's result.
 
 ## 6. Budgets and knobs

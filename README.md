@@ -565,6 +565,12 @@ cage_mounts:                # extra host paths, mounted read-only, by name
   - "~/.config/my-agent"    # agent auth enters here; never implicitly
 ```
 
+For `judge:` checks, Lute sends the rubric as trusted instructions and wraps
+the candidate diff inside `BEGIN UNTRUSTED DIFF` / `END UNTRUSTED DIFF`
+markers. The judge is told to treat diff content as evidence only, never as
+instructions, and still closes only when the first output line is exactly
+`PASS`.
+
 The prompt still flows on stdin; output still lands in the same per-run log.
 **Secrets policy is absence:** nothing of the host is visible except the repo
 and what `cage_mounts` names, so `~/.ssh` and your environment simply aren't
