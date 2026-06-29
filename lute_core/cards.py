@@ -11,6 +11,7 @@ from .context import AppContext
 from .domain import Card, LoopSpec
 from .errors import Blocked, Gated
 from .events import EventBus, now_iso
+from .formatting import human, tail
 from .git_repo import GitRepo
 from .ledger import runs_since_authenticated_answer
 from .state_store import StateStore
@@ -27,15 +28,6 @@ def summarize_card(lid: str, text: str) -> Card:
         summary=(text.splitlines() or [""])[0],
         next_command=next_command,
     )
-
-
-def tail(text: str, n: int) -> str:
-    return "\n".join(text.splitlines()[-n:])
-
-
-def human(secs: float) -> str:
-    minutes, seconds = divmod(int(secs), 60)
-    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
 
 
 class CardService:
