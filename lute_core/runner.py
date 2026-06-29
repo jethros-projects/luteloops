@@ -392,6 +392,16 @@ class Runner:
         except (OSError, ValueError):
             pass
 
+    def active_lock_info(self) -> dict | None:
+        lock = self.ctx.paths.lock
+        if not self.store.is_regular_file(lock):
+            return None
+        try:
+            info = json.loads(open(lock).read())
+        except (ValueError, OSError):
+            return None
+        return info if processes.pid_alive(info.get("pid")) else None
+
     def ledger_totals(self) -> tuple[int, float]:
         return ledger_totals(self.ledger_entries())
 

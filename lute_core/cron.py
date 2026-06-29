@@ -52,7 +52,7 @@ def sync_or_remove(action: str, repo: str, root: LoopSpec | None, schedules: lis
         if errors:
             raise UsageError("; ".join(errors))
         for schedule in schedules:
-            block.append(f"{schedule['at']} cd {shlex.quote(repo)} && {self_cmd()} run {root.id}")
+            block.append(f"{schedule['at']} cd {shlex.quote(repo)} && {self_cmd()} run --skip-if-running {root.id}")
         if block:
             block = [begin, *block, end]
     text = "\n".join(keep + block).strip("\n")

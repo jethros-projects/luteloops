@@ -1778,7 +1778,7 @@ EOF
 }
 
 # ---------------------------------------------------------------- T28
-t_t28() { # cron: sync compiles schedules: into a managed crontab block; remove strips it; bad schedules die
+t_t28() { # cron: sync compiles schedules with overlap skip; remove strips it; bad schedules die
   mkrepo "$WORK/t28"
   # Shadow the real crontab with a file-backed stand-in on PATH - never touch the user's crontab.
   bin="$WORK/t28-bin"; mkdir -p "$bin"; cronfile="$WORK/t28-crontab.txt"
@@ -1808,7 +1808,22 @@ EOF
   [ "$rc" -eq 0 ] || die "28) cron sync exited $rc, want 0: $(cat out.log)"
   grep -q '^# BEGIN lute ' "$cronfile" || die "28) no managed BEGIN marker: $(cat "$cronfile")"
   grep -q '^# END lute '   "$cronfile" || die "28) no managed END marker: $(cat "$cronfile")"
-  grep -Eq '^0 3 \* \* \* cd .* run nightly$' "$cronfile" || die "28) schedule not compiled: $(cat "$cronfile")"
+  grep -Eq '^0 3 \* \* \* cd .* run --skip-if-running nightly$' "$cronfile" \
+    || die "28) schedule not compiled with skip-if-running: $(cat "$cronfile")"
+
+  printf '{"pid":%s,"start":"fixture"}\n' "$$" > .lute/lock
+  rc=0; "$LUTE" run --skip-if-running nightly --plain > skip.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "28) skip-if-running exited $rc, want 0: $(cat skip.out)"
+  grep -q 'skip nightly; another run is active' skip.out \
+    || die "28) skip-if-running did not explain the overlap: $(cat skip.out)"
+  if git rev-parse -q --verify lute/nightly >/dev/null; then
+    die "28) skip-if-running started a run branch despite the live lock"
+  fi
+  rc=0; "$LUTE" run nightly --plain > locked.out 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "28) normal run skipped lock enforcement: $(cat locked.out)"
+  grep -q 'another lute run is active' locked.out \
+    || die "28) normal run did not report the active lock: $(cat locked.out)"
+  rm -f .lute/lock
 
   # idempotent + foreign-line-safe: a second sync doesn't duplicate, a pre-existing line survives.
   printf '# my own cron line\n' >> "$cronfile"
@@ -3111,7 +3126,7 @@ desc() {
     t25) echo "judge          a judge: exam closes on PASS, escalates on a malformed reply; lint flags self-grade + missing judge" ;;
     t26) echo "cage-wrap      a custom cage template substitutes {repo}/{image}/{mounts}, runs {cmd}, keeps unknown braces; no {cmd} dies" ;;
     t27) echo "plan           lute plan drives an agent to write lute.proposed.yaml and closes when it lints clean" ;;
-    t28) echo "cron           sync compiles schedules: into a managed crontab block; remove strips it; non-root schedules die" ;;
+    t28) echo "cron           sync compiles schedules with overlap skip; remove strips it; non-root schedules die" ;;
     t29) echo "cold-start     help/version exit 0; missing-file routes to init/plan; clean lint + success name the next step; key suggestions; dirty-tree names files; answer lists cards; packaged plan skill" ;;
     t30) echo "truth-telling  lute inbox lists waiting cards + next cmd; status shows ✗/✋ (not ↻/✔) for halts + agent time; stream shows run N/cap + confirm streak" ;;
     t31) echo "once           a stateless no-config one-shot runs an agent until --until passes, on a branch, writing no file; --until mandatory; --id picks the branch" ;;

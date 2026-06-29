@@ -235,7 +235,7 @@ runs only the compiled proposal after you review and rename it.
 |---|---|
 | `lute init` | scaffold a `lute.yaml` and `.lute/` (or `lute init --skill` to write a local copy of the packaged luteloops skill) |
 | `lute lint [file]` | validate the schema, resolve agents, and **execute every `done_when` once**, classifying each pass / fail / error / not-yet; an error fails the lint, because an exam must be administrable before work begins |
-| `lute run [root-id]` | run loops depth-first until everything is green (`--agent CMD`, `--file F`, `--plain`, `--bg` to detach, `--dry-run` to preview the plan + first prompt without spending); child loops run through their parent |
+| `lute run [root-id]` | run loops depth-first until everything is green (`--agent CMD`, `--file F`, `--plain`, `--bg` to detach, `--dry-run` to preview, `--skip-if-running` for cron overlap); child loops run through their parent |
 | `lute once --until C -- "task"` | one-shot, no file: run an agent until check `C` passes (`--agent`, `--id`, `--budget`) |
 | `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable) |
 | `lute status [file]` | re-run each check once and print the loop hierarchy: ✔ done / ↻ running / ⏳ waiting / ✗ blocked / ✋ gated, plus cumulative agent time |
@@ -602,10 +602,11 @@ schedules:
 
 `lute cron sync` compiles it into a managed block in your crontab
 (`# BEGIN lute <repo> … # END lute <repo>`), idempotent and removable with
-`lute cron remove`. Each tick is a fresh `lute run <root-id>`; loops
-themselves never gain a time field. Note: cron jobs run with a minimal
-environment; make sure your agent CLI is on cron's `PATH`, and check
-`mail` (or wrap the entry) for tick output.
+`lute cron remove`. Each tick is a fresh `lute run --skip-if-running <root-id>`:
+if a previous tick still holds the repo lock, the new tick exits 0 without
+starting duplicate work. Loops themselves never gain a time field. Note: cron
+jobs run with a minimal environment; make sure your agent CLI is on cron's
+`PATH`, and check `mail` (or wrap the entry) for tick output.
 
 ## What's deliberately not here
 
