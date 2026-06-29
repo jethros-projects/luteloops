@@ -38,13 +38,14 @@ loops:
   - loop: safety
     task: Truth and safety - gate:human approval (READY card, exit 4), the
       container cage, and protected exam materials (a bought pass is voided).
-    done_when: "./test.sh t16 t17"
+    done_when: "./test.sh t16 t17 t44"
     protected: ["test.sh", "tests/**"]
     budget: 20 runs
   - loop: parallel
     task: Parallel siblings via worktrees - concurrent children merge back, a
-      conflict escalates without a broken commit, a crash resumes (stale git
-      locks cleared), slots isolate, and one run holds the repo lock.
+      merged child invariant is rechecked, a conflict escalates without a broken
+      commit, a crash resumes (stale git locks cleared), slots isolate, and one
+      run holds the repo lock.
     done_when: "./test.sh t18 t19 t20 t21 t22 t24"
     protected: ["test.sh", "tests/**"]
     budget: 40 runs

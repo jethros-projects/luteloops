@@ -430,9 +430,12 @@ run halts with an escalation card naming the conflicting files and loops, the
 parent branch left clean, **exit 3**; make the edits disjoint (or merge by
 hand) and re-run. If a child escalates or gates instead of closing, the parent
 collects all children to a stopping point, relays their cards, merges none, and
-exits with the most severe child code. After every child merges cleanly the
-parent runs **its own `done_when` on the integrated tree**, so write the parent
-exam to cover cross-child behavior; there is no per-child re-check after merge.
+exits with the most severe child code. After every child merges cleanly, Lute
+re-runs each direct child `done_when` once against the merged tree before the
+parent can close. If a child invariant was broken by the merge, the failure
+becomes the parent loop's next repair prompt. The parent still runs **its own
+`done_when` on the integrated tree**, so write the parent exam to cover
+cross-child behavior that no child owns alone.
 
 `LUTE_SLOT` (1, 2, 3… per child) lets checks dodge collisions: a per-slot port
 (`PORT=$((3000+LUTE_SLOT))`) or scratch path. A run is **crash-durable by
@@ -447,10 +450,11 @@ A check has three honest answers, not two: exit 0 is pass, **exit 75 is
 "not yet"**: nothing is wrong, nothing is done, ask me later. Anything
 else is fail. On a not-yet the runner wakes **no** agent and spends **no**
 run budget; it sleeps `check_every` (a new optional per-loop field: `30s`,
-`5m`, `2h`; default 60s) and re-asks. Time budgets keep ticking while it
-waits, so an hours budget is the limit that stops a watcher waiting forever
-(budgets now take `s`/`m`/`h` units, e.g. `budget: 90m`). Only a real
-failure's output ever rides into an agent prompt; silence is not evidence.
+`5m`, `2h`; default 60s) and re-asks. Because run budgets do not tick while
+waiting, any loop whose check returns 75 must have an `s`/`m`/`h` time budget.
+`lute lint` errors when a dry-run returns 75 without a time cap, and `lute run`
+escalates immediately instead of hanging. Only a real failure's output ever
+rides into an agent prompt; silence is not evidence.
 
 ```yaml
 loop: deploy-quiet
@@ -464,8 +468,8 @@ Combine the trio: a not-yet check, `lute run --bg`, and `lute cron sync`,
 and lute is a monitor that costs ~nothing while things are healthy and spends
 exactly one agent run per real problem. The event stream, `watch`, and plain
 mode show waiting loops as ⏳ (`⏳ deploy-quiet: not yet · next check in 30m`),
-and `lute lint` classifies a 75 dry-run as `not_yet`: a valid, lint-passing
-outcome.
+and `lute lint` classifies a capped 75 dry-run as `not_yet`: a valid,
+lint-passing outcome.
 
 ## Gates (`gate: human`)
 

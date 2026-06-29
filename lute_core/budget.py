@@ -25,6 +25,9 @@ class BudgetService:
     def runs_cap(self, loop: LoopSpec) -> int | None:
         return next((limit.amount for limit in loop.budget.limits if limit.kind == "runs"), None)
 
+    def secs_cap(self, loop: LoopSpec) -> int | None:
+        return next((limit.amount for limit in loop.budget.limits if limit.kind == "secs"), None)
+
     def spent(self, loop: LoopSpec, waited: float = 0.0) -> bool:
         return self.decision(loop, waited).spent
 

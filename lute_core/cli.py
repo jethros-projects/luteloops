@@ -259,6 +259,18 @@ def local_check_paths(command: str) -> list[str]:
     return sorted(set(candidates))
 
 
+def has_time_budget(loop: LoopSpec) -> bool:
+    return any(limit.kind == "secs" for limit in loop.budget.limits)
+
+
+def is_placeholder_check(command: str) -> bool:
+    try:
+        parts = shlex.split(command.strip())
+    except ValueError:
+        return False
+    return parts in (["true"], [":"], ["exit", "0"])
+
+
 def cmd_run(args: list[str]) -> int:
     pos, opts = parse(args, {"--agent", "--file"}, {"--plain", "--bg", "--dry-run"})
     need_pos(pos, "usage: lute run [root-id]", 0, 1)
@@ -407,6 +419,10 @@ def cmd_lint(args: list[str]) -> int:
                     warnings.append(f"{loop.id}: done_when invokes {check_path} but it is not covered by protected:")
             if loop.parallel and len(loop.children) < 2:
                 warnings.append(f"{loop.id}: parallel with fewer than 2 children runs nothing concurrently")
+            if is_placeholder_check(loop.done_when.command):
+                warnings.append(f"{loop.id}: done_when looks like a placeholder; use an exam that measures the goal")
+                if loop.parallel and loop.children:
+                    warnings.append(f"{loop.id}: parallel parent needs a real integration done_when for the merged children")
             if loop.done_when.command.startswith("judge:"):
                 if not judge_cmd:
                     errors.append(f"{loop.id}: judge: check but no judge configured in {ctx.paths.config}")
@@ -414,6 +430,8 @@ def cmd_lint(args: list[str]) -> int:
                 else:
                     if judge_cmd == effective:
                         warnings.append(f"{loop.id}: judge equals the worker agent; the doer must not grade its own homework (§6)")
+                    if loop.confirm < 2:
+                        warnings.append(f"{loop.id}: judge: checks should use confirm: 2")
                     if caged:
                         cls = "pass"
                         warnings.append(f"{loop.id}: judge dry-run skipped under cage; verify the judge exists in {ctx.config.get('cage_image', 'alpine:3')}")
@@ -426,6 +444,11 @@ def cmd_lint(args: list[str]) -> int:
                 cls = runner.checks.run(loop, classify=True).verdict.value
                 if cls == "error":
                     errors.append(f"{loop.id}: done_when not administrable: `{loop.done_when.command}` (command not found / not on PATH, or not valid shell)")
+                if cls == "not_yet" and not has_time_budget(loop):
+                    errors.append(
+                        f"{loop.id}: done_when returned 75 but budget has no time cap; "
+                        "not-yet loops need an s/m/h budget because run budgets do not tick while waiting"
+                    )
             counts[cls] += 1
             print(f"{cls:5} {loop.id}: {loop.done_when.command}")
             for child in loop.children:

@@ -98,7 +98,9 @@ Rules that make exams trustworthy:
   `check_every`, wakes no agent, and spends no run budget - only a real
   failure's output ever reaches a prompt. Use it when the exam watches the
   world (deploys, queues, inboxes) rather than the work, and always give such
-  a loop a time budget as the limit:
+  a loop a time budget as the limit. `lute lint` errors when a dry-run returns
+  75 without a time budget, and `lute run` escalates immediately rather than
+  waiting forever:
 
 ```yaml
 loop: deploy-quiet
@@ -130,13 +132,17 @@ A loop that closes on a judge is closed-ish. If it sits near anything irreversib
 - the parent must have its own `done_when` integration check for the merged result
 - children's checks must avoid port/scratch collisions; use `LUTE_SLOT` when needed
 
-There is no per-child re-check after merge.
+After parallel children merge, Lute re-runs each direct child `done_when` once
+against the merged tree. If a child invariant no longer passes, that failure
+becomes the parent loop's next repair prompt. This catches sibling interference,
+but it does not replace the parent integration exam: the parent still needs to
+check behavior no child owns alone.
 
 Every loop gets a budget. Sizing defaults: mechanical edits 3 runs; type/test fixing 10–15; open-ended work 20 runs plus a time cap. The root always carries a time cap as the global fuse. Add `confirm: 2` to any exam known or likely to be flaky (integration suites, anything with timing, every judge).
 
 ## 7. Anti-patterns (reject these in your own drafts and in reviews)
 
-Vague exams ("works correctly", "is done"). Placeholder exams (`done_when: "true"`). Circular exams (§4). Unprotected exam materials the worker can edit. Activity decomposition ("research" / "implement" as loops). Logic smuggling (any urge for if/else/depends_on - use order, check-before-work, shell booleans, or move the branching into the task where the agent's intelligence handles it). DAG leakage in final YAML (`depends_on:`, `dag:`, `nodes:`, `edges:`, Mermaid, or Markdown instead of loops). Treating `lute.plan.yaml` as runtime input. Parallelizing conceptual dependencies without disjoint files/resources and a parent integration exam. Watcher loops using exit 75 without time budgets. Loops without budgets. Oversized loops (>15 expected runs). Judges for greppable facts. Noisy exams. A root whose exam is weaker than the user's stated goal.
+Vague exams ("works correctly", "is done"). Placeholder exams (`done_when: "true"`; lint warns). Circular exams (§4). Unprotected exam materials the worker can edit. Activity decomposition ("research" / "implement" as loops). Logic smuggling (any urge for if/else/depends_on - use order, check-before-work, shell booleans, or move the branching into the task where the agent's intelligence handles it). DAG leakage in final YAML (`depends_on:`, `dag:`, `nodes:`, `edges:`, Mermaid, or Markdown instead of loops). Treating `lute.plan.yaml` as runtime input. Parallelizing conceptual dependencies without disjoint files/resources and a parent integration exam. Watcher loops using exit 75 without time budgets (lint errors when observed). Loops without budgets. Oversized loops (>15 expected runs). Judges for greppable facts or without `confirm: 2` (lint warns). Noisy exams. A root whose exam is weaker than the user's stated goal.
 
 ## 8. Worked examples
 
