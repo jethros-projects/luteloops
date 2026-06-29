@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 from .context import AppContext
 from .domain import CheckResult, LoopSpec, Verdict
-from .errors import InternalError, UsageError
+from .errors import UsageError
 from .git_repo import GitRepo
 
 CHECK_TIMEOUT = 600
@@ -17,8 +18,20 @@ UNTRUSTED_DIFF_BEGIN = "BEGIN UNTRUSTED DIFF"
 UNTRUSTED_DIFF_END = "END UNTRUSTED DIFF"
 
 
-class CheckTimedOut(TimeoutError):
-    pass
+def check_timeout() -> float:
+    raw = os.environ.get("LUTE_CHECK_TIMEOUT")
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = CHECK_TIMEOUT
+        if value > 0:
+            return value
+    return CHECK_TIMEOUT
+
+
+def timeout_label(seconds: float) -> str:
+    return f"{int(seconds)}s" if float(seconds).is_integer() else f"{seconds:g}s"
 
 
 def tail(text: str, n: int) -> str:
@@ -36,7 +49,7 @@ def judge_payload(rubric: str, diff: str) -> str:
     )
 
 
-def run_shell_check(command: str, timeout: int, *, lenient: bool = False, classify: bool = False) -> tuple[str, str]:
+def run_shell_check(command: str, timeout: float, *, lenient: bool = False, classify: bool = False) -> tuple[str, str]:
     if classify and subprocess.run(["sh", "-n", "-c", command], capture_output=True).returncode:
         return "error", ""
     try:
@@ -47,10 +60,8 @@ def run_shell_check(command: str, timeout: int, *, lenient: bool = False, classi
             text=True,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired as exc:
-        if classify or lenient:
-            return ("error" if classify else "fail"), "(check timed out)"
-        raise CheckTimedOut(command) from exc
+    except subprocess.TimeoutExpired:
+        return "fail", f"(check timed out after {timeout_label(timeout)})"
     if result.returncode == 0:
         verdict = "pass"
     elif result.returncode == 75:
@@ -73,13 +84,7 @@ class CheckRunner:
         if command.startswith("judge:"):
             verdict, output = self.judge(loop, command[len("judge:"):].strip(), lenient)
         else:
-            try:
-                verdict, output = run_shell_check(command, CHECK_TIMEOUT, lenient=lenient, classify=classify)
-            except CheckTimedOut as exc:
-                raise InternalError(
-                    f"check `{command}` for '{loop.id}' exceeded {CHECK_TIMEOUT // 60} minutes; "
-                    "long-running checks are outside the initial release boundary (spec §5); split or speed up the exam"
-                ) from exc
+            verdict, output = run_shell_check(command, check_timeout(), lenient=lenient, classify=classify)
         return CheckResult(Verdict(verdict), output)
 
     def judge(self, loop: LoopSpec, rubric: str, lenient: bool = False) -> tuple[str, str]:
@@ -90,6 +95,7 @@ class CheckRunner:
             raise UsageError(f"loop '{loop.id}' uses judge: but {self.ctx.paths.config} has no 'judge' command")
         diff = self.git.text("diff", self.git.branch_base() + "...HEAD")
         payload = judge_payload(rubric, diff)
+        timeout = check_timeout()
         try:
             result = subprocess.run(
                 ["sh", "-c", self.cage_wrap(judge)],
@@ -98,15 +104,10 @@ class CheckRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                timeout=CHECK_TIMEOUT,
+                timeout=timeout,
             )
-        except subprocess.TimeoutExpired as exc:
-            if lenient:
-                return "fail", "(judge timed out)"
-            raise InternalError(
-                f"judge for '{loop.id}' exceeded {CHECK_TIMEOUT // 60} minutes; "
-                "long-running checks are outside the initial release boundary (spec §5); use a faster judge"
-            ) from exc
+        except subprocess.TimeoutExpired:
+            return "fail", f"(judge timed out after {timeout_label(timeout)})"
         out = result.stdout or ""
         first = out.splitlines()[0] if out.splitlines() else ""
         return ("pass" if first == "PASS" else "fail"), tail(out, 50)
