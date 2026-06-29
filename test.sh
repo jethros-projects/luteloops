@@ -177,6 +177,21 @@ EOF
   [ -f prompts/escalate-loop.run2.txt ] || die "no second agent run after answer (budget not refreshed?)"
   grep -qF 'A human reviewed the last escalation and said: Try the MAGIC-XYZZY approach instead.' \
     prompts/escalate-loop.run2.txt || die "answer text not injected into the next prompt"
+
+  mkrepo "$WORK/t4-timeout"
+  cat > lute.yaml <<EOF
+loop: timeout-loop
+agent: "true"
+task: Try again after a slow exam.
+done_when: "sleep 2"
+budget: 1 runs
+EOF
+  seal
+  rc=0; LUTE_CHECK_TIMEOUT=1 "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "timeout run exited $rc, want blocked exit 3: $(cat out.log)"
+  [ -f INBOX/timeout-loop.md ] || die "timeout loop did not create a card"
+  grep -qF 'check timed out after 1s' INBOX/timeout-loop.md \
+    || die "timeout card does not explain the check timeout: $(cat INBOX/timeout-loop.md)"
 }
 
 # ---------------------------------------------------------------- T5
@@ -1647,6 +1662,24 @@ EOF
   seal
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
   [ "$rc" -eq 3 ] || die "25e) leading-space PASS closed; first judge line must be exactly PASS: $(cat out.log)"
+
+  # --- f) judge timeouts degrade to normal escalation instead of aborting the whole run.
+  mkrepo "$WORK/t25f"
+  printf 'x\n' > essay.txt
+  mkdir -p .lute
+  printf 'agent: "true"\njudge: "sleep 2"\n' > .lute/config.yaml
+  cat > lute.yaml <<EOF
+loop: judge-timeout
+task: should not matter
+done_when: "judge: anything at all"
+budget: 1 runs
+EOF
+  seal
+  rc=0; LUTE_CHECK_TIMEOUT=1 "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "25f) judge timeout exited $rc, want blocked exit 3: $(cat out.log)"
+  [ -f INBOX/judge-timeout.md ] || die "25f) judge timeout did not create a card"
+  grep -qF 'judge timed out after 1s' INBOX/judge-timeout.md \
+    || die "25f) card does not explain the judge timeout: $(cat INBOX/judge-timeout.md)"
 }
 
 # ---------------------------------------------------------------- T26
@@ -1745,7 +1778,7 @@ EOF
 }
 
 # ---------------------------------------------------------------- T28
-t_t28() { # cron: sync compiles schedules: into a managed crontab block; remove strips it; bad schedules die
+t_t28() { # cron: sync compiles schedules with overlap skip; remove strips it; bad schedules die
   mkrepo "$WORK/t28"
   # Shadow the real crontab with a file-backed stand-in on PATH - never touch the user's crontab.
   bin="$WORK/t28-bin"; mkdir -p "$bin"; cronfile="$WORK/t28-crontab.txt"
@@ -1775,7 +1808,22 @@ EOF
   [ "$rc" -eq 0 ] || die "28) cron sync exited $rc, want 0: $(cat out.log)"
   grep -q '^# BEGIN lute ' "$cronfile" || die "28) no managed BEGIN marker: $(cat "$cronfile")"
   grep -q '^# END lute '   "$cronfile" || die "28) no managed END marker: $(cat "$cronfile")"
-  grep -Eq '^0 3 \* \* \* cd .* run nightly$' "$cronfile" || die "28) schedule not compiled: $(cat "$cronfile")"
+  grep -Eq '^0 3 \* \* \* cd .* run --skip-if-running nightly$' "$cronfile" \
+    || die "28) schedule not compiled with skip-if-running: $(cat "$cronfile")"
+
+  printf '{"pid":%s,"start":"fixture"}\n' "$$" > .lute/lock
+  rc=0; "$LUTE" run --skip-if-running nightly --plain > skip.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "28) skip-if-running exited $rc, want 0: $(cat skip.out)"
+  grep -q 'skip nightly; another run is active' skip.out \
+    || die "28) skip-if-running did not explain the overlap: $(cat skip.out)"
+  if git rev-parse -q --verify lute/nightly >/dev/null; then
+    die "28) skip-if-running started a run branch despite the live lock"
+  fi
+  rc=0; "$LUTE" run nightly --plain > locked.out 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "28) normal run skipped lock enforcement: $(cat locked.out)"
+  grep -q 'another lute run is active' locked.out \
+    || die "28) normal run did not report the active lock: $(cat locked.out)"
+  rm -f .lute/lock
 
   # idempotent + foreign-line-safe: a second sync doesn't duplicate, a pre-existing line survives.
   printf '# my own cron line\n' >> "$cronfile"
@@ -3078,7 +3126,7 @@ desc() {
     t25) echo "judge          a judge: exam closes on PASS, escalates on a malformed reply; lint flags self-grade + missing judge" ;;
     t26) echo "cage-wrap      a custom cage template substitutes {repo}/{image}/{mounts}, runs {cmd}, keeps unknown braces; no {cmd} dies" ;;
     t27) echo "plan           lute plan drives an agent to write lute.proposed.yaml and closes when it lints clean" ;;
-    t28) echo "cron           sync compiles schedules: into a managed crontab block; remove strips it; non-root schedules die" ;;
+    t28) echo "cron           sync compiles schedules with overlap skip; remove strips it; non-root schedules die" ;;
     t29) echo "cold-start     help/version exit 0; missing-file routes to init/plan; clean lint + success name the next step; key suggestions; dirty-tree names files; answer lists cards; packaged plan skill" ;;
     t30) echo "truth-telling  lute inbox lists waiting cards + next cmd; status shows ✗/✋ (not ↻/✔) for halts + agent time; stream shows run N/cap + confirm streak" ;;
     t31) echo "once           a stateless no-config one-shot runs an agent until --until passes, on a branch, writing no file; --until mandatory; --id picks the branch" ;;
