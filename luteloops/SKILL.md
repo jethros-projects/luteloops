@@ -21,7 +21,7 @@ done_when:  shell command (0 = pass, 75 = not yet, else fail) OR
 budget:     "N runs", "Ns"/"Nm"/"Nh", combinable with "/" (default 10 runs)
 confirm:    consecutive passes needed to close (default 1); fail and
             not-yet both reset the streak
-check_every: re-ask cadence after a not-yet verdict ("30s", "5m";
+check_every: positive re-ask cadence after a not-yet verdict ("30s", "5m";
             default 60s)
 gate:       "human" - pause a passing loop for approval (READY card,
             exit 4; approve with `lute answer <loop> approve`)

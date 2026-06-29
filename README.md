@@ -234,7 +234,7 @@ runs only the compiled proposal after you review and rename it.
 | verb | what it does |
 |---|---|
 | `lute init` | scaffold a `lute.yaml` and `.lute/` (or `lute init --skill` to write a local copy of the packaged luteloops skill) |
-| `lute lint [file]` | validate the schema, resolve agents, and **execute every `done_when` once**, classifying each pass / fail / error; an error fails the lint, because an exam must be administrable before work begins |
+| `lute lint [file]` | validate the schema, resolve agents, and **execute every `done_when` once**, classifying each pass / fail / error / not-yet; an error fails the lint, because an exam must be administrable before work begins |
 | `lute run [root-id]` | run loops depth-first until everything is green (`--agent CMD`, `--file F`, `--plain`, `--bg` to detach, `--dry-run` to preview the plan + first prompt without spending); child loops run through their parent |
 | `lute once --until C -- "task"` | one-shot, no file: run an agent until check `C` passes (`--agent`, `--id`, `--budget`) |
 | `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable) |
@@ -451,7 +451,8 @@ A check has three honest answers, not two: exit 0 is pass, **exit 75 is
 else is fail. On a not-yet the runner wakes **no** agent and spends **no**
 run budget; it sleeps `check_every` (a new optional per-loop field: `30s`,
 `5m`, `2h`; default 60s) and re-asks. Because run budgets do not tick while
-waiting, any loop whose check returns 75 must have an `s`/`m`/`h` time budget.
+waiting, any loop whose check returns 75 must have an `s`/`m`/`h` time budget,
+and `check_every` must be positive.
 `lute lint` errors when a dry-run returns 75 without a time cap, and `lute run`
 escalates immediately instead of hanging. Only a real failure's output ever
 rides into an agent prompt; silence is not evidence.
