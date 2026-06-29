@@ -65,7 +65,8 @@ HELP = {
     "run": "lute run [root-id]: run loops until every done_when is green.\n"
     "  --file F   use manifest F (default lute.yaml)      --agent CMD  override the agent\n"
     "  --plain    stream one line/event in foreground     --bg         detach into its own session\n"
-    "  --dry-run  print the resolved plan + first prompt, spend nothing.  CLI runs select the root; children run through their parent.",
+    "  --dry-run  print the resolved plan + first prompt, spend nothing.\n"
+    "  --skip-if-running  exit 0 without work if another run holds this repo's lock.",
     "once": 'lute once --until "<check>" --agent <cli> -- "<task>": one-shot, no file written.\n'
     "  Runs an agent until <check> (the done_when) passes, on branch lute/<id>.\n"
     "  --id NAME  name the branch (default 'once')        --budget SPEC  e.g. \"20 runs\" or \"2h\".",
@@ -274,7 +275,7 @@ def is_placeholder_check(command: str) -> bool:
 
 
 def cmd_run(args: list[str]) -> int:
-    pos, opts = parse(args, {"--agent", "--file"}, {"--plain", "--bg", "--dry-run"})
+    pos, opts = parse(args, {"--agent", "--file"}, {"--plain", "--bg", "--dry-run", "--skip-if-running"})
     need_pos(pos, "usage: lute run [root-id]", 0, 1)
     ctx0, git, store, _ = make_runtime()
     manifest = os.path.abspath(opts.get("file") or default_file())
@@ -292,6 +293,14 @@ def cmd_run(args: list[str]) -> int:
         first = next((loop for _, loop in rows if loop.task is not None), root)
         print(f"\nfirst prompt → {first.id}\n" + "-" * 40 + "\n" + runner.agents.build_prompt(first, agents.get(str(first.id)) or "", "(no check output yet; dry-run preview)", None))
         return 0
+    if opts.get("skip-if-running"):
+        info = runner.active_lock_info()
+        if info:
+            print(
+                f"lute: skip {target.id}; another run is active in this repo "
+                f"(pid {info.get('pid')}, since {info.get('start', '?')})"
+            )
+            return 0
     if opts.get("bg"):
         proc = spawn_run(args, store, ctx.paths.runner_log)
         print(f"detached: run continues (pid {proc.pid}) · re-attach: lute watch · stop: lute stop")
