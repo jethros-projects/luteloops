@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .domain import Budget, LoopSpec
+from .domain import LoopSpec
 from .git_repo import GitRepo
 from .ledger import AnswerAuth, budget_spent, runs_since_authenticated_answer
 
@@ -44,7 +44,3 @@ class BudgetService:
             waited,
         )
         return BudgetDecision(spent, runs, seconds)
-
-
-def budget_pairs(budget: Budget) -> list[tuple[str, int]]:
-    return budget.as_pairs()
