@@ -594,7 +594,7 @@ agent: "$FAKE"
 task: Should never be needed while quiet.
 done_when: "sh check.sh"
 check_every: 1s
-budget: 5 runs
+budget: 5s
 EOF
   echo '{}' > playbook.json
   seal
@@ -619,7 +619,7 @@ agent: "$FAKE"
 task: Investigate the real failure.
 done_when: "sh check.sh"
 check_every: 1s
-budget: 5 runs
+budget: 5s
 EOF
   cat > playbook.json <<'EOF'
 { "watch-b": { "1": [ {"journal": "run 1: looked into the failure."} ] } }
@@ -649,7 +649,7 @@ EOF
   grep -q "Still not-yet" INBOX/watch-c.md || die "c) card does not mention the not-yet timeout: $(cat INBOX/watch-c.md)"
   [ "$(grep -c '"ev": "agent_start"' .lute/events.jsonl)" -eq 0 ] || die "c) an agent was spawned"
 
-  # --- d) lint: a 75 dry-run classifies not_yet and passes the lint
+  # --- d) lint/run: a 75 dry-run without a time budget is refused instead of hanging forever
   mkrepo "$WORK/t15-d"
   cat > lute.yaml <<EOF
 loop: quiet-exam
@@ -660,8 +660,27 @@ budget: 2 runs
 EOF
   seal
   rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
-  [ "$rc" -eq 0 ] || die "d) lint failed on a not-yet exam: $(cat lint.out)"
+  [ "$rc" -ne 0 ] || die "d) lint passed a not-yet exam with only a runs budget"
   grep -Eq '^not_yet +quiet-exam:' lint.out || die "d) check not classified not_yet: $(cat lint.out)"
+  grep -q "budget has no time cap" lint.out || die "d) lint did not explain the missing time cap: $(cat lint.out)"
+  rm -f lint.out
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "d) runs-only not-yet loop exited $rc, want 3: $(cat out.log)"
+  grep -q "needs a time budget" INBOX/quiet-exam.md || die "d) card does not explain the missing time budget: $(cat INBOX/quiet-exam.md)"
+  [ "$(grep -c '"ev": "agent_start"' .lute/events.jsonl)" -eq 0 ] || die "d) a runs-only not-yet loop woke an agent"
+
+  mkrepo "$WORK/t15-d2"
+  cat > lute.yaml <<EOF
+loop: quiet-exam
+agent: "$FAKE"
+task: x
+done_when: "exit 75"
+budget: 2s
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "d) lint failed on a not-yet exam with a time budget: $(cat lint.out)"
+  grep -Eq '^not_yet +quiet-exam:' lint.out || die "d) capping check not classified not_yet: $(cat lint.out)"
 
   # --- e) streak: confirm 2 with 0,75,0,0 - not_yet resets the consecutive-pass streak
   mkrepo "$WORK/t15-e"
@@ -674,7 +693,7 @@ task: Should never run.
 done_when: "sh check.sh"
 check_every: 1s
 confirm: 2
-budget: 5 runs
+budget: 5s
 EOF
   echo '{}' > playbook.json
   seal
@@ -1098,6 +1117,37 @@ PY
   grep -q 'def func_b' calc.py || die "18) func_b missing from merged calc.py"
   [ -z "$(ls .lute/wt 2>/dev/null)" ] || die "18) worktrees not cleaned: $(ls .lute/wt)"
   [ -z "$(git worktree list | tail -n +2)" ] || die "18) stray git worktrees: $(git worktree list)"
+
+  # --- b) clean textual merge, broken child invariant: parent gets a repair turn
+  mkrepo "$WORK/t18b"
+  cat > lute.yaml <<'EOF'
+loop: recheck-parent
+agent: "cat > parent_prompt.txt; rm -f breaker.txt; touch parent_fixed"
+task: Repair integration failures surfaced after parallel children merge.
+done_when: "true"
+parallel: true
+budget: 3 runs
+loops:
+  - loop: child-a
+    agent: "echo ok > a.txt"
+    task: write a.txt
+    done_when: "test -f a.txt && ! test -f breaker.txt"
+    budget: 2 runs
+  - loop: child-b
+    agent: "echo ok > b.txt; touch breaker.txt"
+    task: write b.txt
+    done_when: "test -f b.txt"
+    budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "18b) parallel recheck run exited $rc: $(cat out.log)"
+  [ -f parent_fixed ] || die "18b) parent agent did not run to repair the merged child invariant"
+  [ ! -f breaker.txt ] || die "18b) child invariant breaker survived parent repair"
+  grep -q "Parallel child child-a no longer passes after merge" parent_prompt.txt \
+    || die "18b) parent prompt did not name the failed child recheck: $(cat parent_prompt.txt)"
+  [ "$(grep '"ev": "agent_start"' .lute/events.jsonl | grep -c '"loop": "recheck-parent"')" -eq 1 ] \
+    || die "18b) expected exactly one parent repair run"
 }
 
 # ---------------------------------------------------------------- T19

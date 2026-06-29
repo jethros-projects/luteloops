@@ -150,7 +150,11 @@ class Runner:
         waited = 0.0
         baseline = self.protection.baseline(loop)
         while passes < loop.confirm:
-            verdict, tail_text = self.administer_check(loop, baseline, passes)
+            child_failure = self.recheck_parallel_children(loop)
+            if child_failure:
+                verdict, tail_text = Verdict.FAIL, child_failure
+            else:
+                verdict, tail_text = self.administer_check(loop, baseline, passes)
             if verdict == Verdict.PASS:
                 passes += 1
                 continue
@@ -175,6 +179,28 @@ class Runner:
             return
         for child in loop.children:
             self.run_loop(child, agents_by_loop)
+
+    def recheck_parallel_children(self, loop: LoopSpec) -> str | None:
+        if not (loop.parallel and loop.children):
+            return None
+        for slot, child in enumerate(loop.children, 1):
+            baseline = self.protection.baseline(child)
+            old_slot = os.environ.get("LUTE_SLOT")
+            os.environ["LUTE_SLOT"] = str(slot)
+            try:
+                verdict, tail_text = self.administer_check(child, baseline, 0)
+            finally:
+                if old_slot is None:
+                    os.environ.pop("LUTE_SLOT", None)
+                else:
+                    os.environ["LUTE_SLOT"] = old_slot
+            if verdict != Verdict.PASS:
+                detail = f"\n{tail_text}" if tail_text else ""
+                return (
+                    f"Parallel child {child.id} no longer passes after merge "
+                    f"(verdict: {verdict.value}).{detail}"
+                )
+        return None
 
     def administer_check(self, loop: LoopSpec, baseline, passes: int) -> tuple[Verdict, str]:
         loop_id = str(loop.id)
@@ -205,6 +231,12 @@ class Runner:
         return verdict, tail_text
 
     def wait_on_not_yet(self, loop: LoopSpec, tail_text: str, waited: float) -> float:
+        if self.budget.secs_cap(loop) is None:
+            self.cards.escalate(
+                loop,
+                tail_text,
+                note="A not-yet check (exit 75) needs a time budget; run budgets do not tick while waiting.",
+            )
         if self.budget.spent(loop, waited):
             self.cards.escalate(loop, tail_text, note=f"Still not-yet after {human(waited)} of waiting (check_every {loop.every_str}).")
         time.sleep(loop.every)
