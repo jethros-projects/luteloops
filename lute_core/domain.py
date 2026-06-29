@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -62,13 +62,6 @@ class Budget:
 class CheckSpec:
     command: str
 
-    @property
-    def is_judge(self) -> bool:
-        return self.command.startswith("judge:")
-
-    def startswith(self, prefix: str) -> bool:
-        return self.command.startswith(prefix)
-
     def __str__(self) -> str:
         return self.command
 
@@ -112,22 +105,6 @@ class LoopSpec:
             children=tuple(cls.from_legacy_dict(c) for c in raw.get("children", ())),
         )
 
-    def with_agent(self, agent: str | None, children: tuple["LoopSpec", ...] | None = None) -> "LoopSpec":
-        return LoopSpec(
-            id=self.id,
-            task=self.task,
-            agent=agent,
-            done_when=self.done_when,
-            budget=self.budget,
-            confirm=self.confirm,
-            every=self.every,
-            every_str=self.every_str,
-            gate=self.gate,
-            protected=self.protected,
-            parallel=self.parallel,
-            children=self.children if children is None else children,
-        )
-
     def find(self, loop_id: str) -> "LoopSpec | None":
         if str(self.id) == loop_id:
             return self
@@ -143,27 +120,6 @@ class LoopSpec:
             rows.extend(child.flatten(depth + 1))
         rows.append((depth, self))
         return rows
-
-
-@dataclass(frozen=True)
-class Event:
-    ts: str
-    ev: str
-    loop: str
-    fields: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class LedgerEntry:
-    loop: str
-    fields: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LedgerEntry":
-        return cls(loop=str(data.get("loop", "")), fields=dict(data))
-
-    def to_dict(self) -> dict[str, Any]:
-        return dict(self.fields)
 
 
 @dataclass(frozen=True)

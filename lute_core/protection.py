@@ -15,7 +15,6 @@ import re
 import shutil
 import stat
 import subprocess
-from collections.abc import Callable
 from dataclasses import dataclass, asdict
 from typing import Any
 
@@ -56,27 +55,6 @@ def protected_files(globs: list[str]) -> list[str]:
             if any(m.match(rel) for m in matchers):
                 files.append(rel)
     return files
-
-
-def protected_snapshot(globs: list[str]) -> dict[str, str]:
-    return {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in protected_files(globs)}
-
-
-def protected_snapshot_at(globs: list[str], ref: str, git_text: Callable[..., str]) -> dict[str, str]:
-    matchers = [glob_re(g) for g in globs]
-    snap: dict[str, str] = {}
-    for path in git_text("ls-tree", "-r", "--name-only", ref).splitlines():
-        if any(m.match(path) for m in matchers):
-            if hasattr(git_text, "__self__") and isinstance(getattr(git_text, "__self__"), GitRepo):
-                blob = git_text.__self__.show_bytes(f"{ref}:{path}")
-                if blob is not None:
-                    snap[path] = hashlib.sha256(blob).hexdigest()
-            else:
-                try:
-                    snap[path] = hashlib.sha256(git_text("show", f"{ref}:{path}").encode()).hexdigest()
-                except Exception:
-                    pass
-    return snap
 
 
 def tampered_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
