@@ -24,7 +24,7 @@ confirm:    consecutive passes needed to close (default 1); fail and
 check_every: positive re-ask cadence after a not-yet verdict ("30s", "5m";
             default 60s)
 gate:       "human" - pause a passing loop for approval (READY card,
-            exit 4; approve with `lute answer <loop> approve`)
+            exit 4; only exact `lute answer <loop> approve` seals)
 protected:  globs for exam materials the task could edit
 parallel:   true on a parent - run its children at once (worktree each,
             merged back as each closes); default false = sequential

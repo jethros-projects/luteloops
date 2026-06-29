@@ -146,7 +146,9 @@ class Runner:
         self.run_children(loop, agents_by_loop)
         passes = 0
         answer = self.cards.consume_answer(loop)
-        approved = bool(answer) and loop.gate == Gate.HUMAN
+        approved = loop.gate == Gate.HUMAN and answer is not None and answer.strip() == "approve"
+        if loop.gate == Gate.HUMAN and answer is not None and not approved:
+            answer = None
         waited_by_loop: dict[str, float] = {}
         baseline = self.protection.baseline(loop)
         while passes < loop.confirm:

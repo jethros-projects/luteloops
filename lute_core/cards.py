@@ -162,8 +162,9 @@ class CardService:
                 text + f"READY: exam passing, awaiting your approval\n"
                 f"Check: {loop.done_when.command}\n"
                 f"Diff:\n{diffstat}"
-                f"Approve: lute answer {lid} approve   (ANY answer approves and seals this state; "
-                f"to reject, change files and re-run without answering)\n",
+                f"Approve: lute answer {lid} approve   (only this exact answer seals this state)\n"
+                f"Reject: lute answer {lid} \"...\" records your note but does not seal; "
+                f"change files and re-run if needed\n",
             )
             self.git.shared_text(self.ctx.shared_root, "add", self.path(lid))
             self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): gated")

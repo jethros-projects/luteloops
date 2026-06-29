@@ -240,7 +240,7 @@ runs only the compiled proposal after you review and rename it.
 | `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable) |
 | `lute status [file]` | re-run each check once and print the loop hierarchy: ✔ done / ↻ running / ⏳ waiting / ✗ blocked / ✋ gated, plus cumulative agent time |
 | `lute inbox` | list every blocked/gated loop with the exact command to answer it |
-| `lute answer <loop> "..."` | reply to a card in `INBOX/`; the next run injects it and refreshes that loop's run budget once |
+| `lute answer <loop> "..."` | reply to a card in `INBOX/`; blocked-loop answers are injected into the next run, while gated loops seal only on exact `approve` |
 | `lute quarantine [list|diff <id>|drop <id>|drop --all]` | inspect or remove stored patches for trusted exam/control edits that Lute quarantined out of run commits |
 | `lute stop` | cleanly stop the active run (and any parallel children) in this repo |
 | `lute land [branch]` | merge `lute/<root>` into the start branch **only if the root exam still passes against the merged tree**; conflict or a failed re-check aborts clean and escalates (opt-in; the default is review-then-merge-yourself) |
@@ -498,14 +498,15 @@ reports this as an error, and `lute run` refuses a gated manifest before work
 starts. Use the cage even if the host has no other secrets; for gates, it is the
 trust anchor, not just a convenience.
 
-Approve with `lute answer release-ready approve` (any answer text counts;
-the word is convention, the text is recorded). On the next run the exam is
+Approve with `lute answer release-ready approve`; after trimming whitespace,
+the answer text must be exactly `approve` to seal. On the next run the exam is
 re-verified once before sealing; if the world moved overnight the card is
 marked `SUPERSEDED` and the loop takes the normal fail path. To **reject**,
-you don't answer. Change whatever needed changing and re-run; the gate
-re-examines the new state. A gated loop waiting for you is exempt from
-time-budget expiry: the limit exists for unattended waiting, and a gate is
-attended by definition.
+answer with anything else; Lute records the note, does not inject it as repair
+guidance, and does not unlock the following loop. Change whatever needed
+changing and re-run; the gate re-examines the new state. A gated loop waiting
+for you is exempt from time-budget expiry: the limit exists for unattended
+waiting, and a gate is attended by definition.
 
 ## Protected exams (`protected:`)
 
