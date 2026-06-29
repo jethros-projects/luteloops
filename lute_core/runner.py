@@ -147,25 +147,27 @@ class Runner:
         passes = 0
         answer = self.cards.consume_answer(loop)
         approved = bool(answer) and loop.gate == Gate.HUMAN
-        waited = 0.0
+        waited_by_loop: dict[str, float] = {}
         baseline = self.protection.baseline(loop)
         while passes < loop.confirm:
-            child_failure = self.recheck_parallel_children(loop)
-            if child_failure:
-                verdict, tail_text = Verdict.FAIL, child_failure
+            recheck = self.recheck_parallel_children(loop)
+            if recheck:
+                verdict_loop, verdict, tail_text = recheck
             else:
+                verdict_loop = loop
                 verdict, tail_text = self.administer_check(loop, baseline, passes)
             if verdict == Verdict.PASS:
                 passes += 1
                 continue
             passes = 0
             if verdict == Verdict.NOT_YET:
-                waited = self.wait_on_not_yet(loop, tail_text, waited)
+                key = str(verdict_loop.id)
+                waited_by_loop[key] = self.wait_on_not_yet(verdict_loop, tail_text, waited_by_loop.get(key, 0.0))
                 continue
             if loop.gate == Gate.HUMAN:
                 self.cards.supersede(str(loop.id), approved)
                 approved = False
-            if self.budget.spent(loop, waited):
+            if self.budget.spent(loop, waited_by_loop.get(str(loop.id), 0.0)):
                 self.cards.escalate(loop, tail_text)
             self.run_agent_iteration(loop, agents_by_loop, tail_text, answer, baseline)
             answer = None
@@ -180,7 +182,7 @@ class Runner:
         for child in loop.children:
             self.run_loop(child, agents_by_loop)
 
-    def recheck_parallel_children(self, loop: LoopSpec) -> str | None:
+    def recheck_parallel_children(self, loop: LoopSpec) -> tuple[LoopSpec, Verdict, str] | None:
         if not (loop.parallel and loop.children):
             return None
         for slot, child in enumerate(loop.children, 1):
@@ -194,9 +196,11 @@ class Runner:
                     os.environ.pop("LUTE_SLOT", None)
                 else:
                     os.environ["LUTE_SLOT"] = old_slot
+            if verdict == Verdict.NOT_YET:
+                return child, verdict, tail_text
             if verdict != Verdict.PASS:
                 detail = f"\n{tail_text}" if tail_text else ""
-                return (
+                return loop, Verdict.FAIL, (
                     f"Parallel child {child.id} no longer passes after merge "
                     f"(verdict: {verdict.value}).{detail}"
                 )
