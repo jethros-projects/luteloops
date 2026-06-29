@@ -1,6 +1,6 @@
 #!/bin/bash
 # demo.sh - a live showcase. lute drives a REAL codex agent to fix a broken
-# repo while nested loops close bottom-up in the cockpit. Nothing is faked:
+# repo while nested loops close bottom-up from real checks. Nothing is faked:
 # codex reads each prompt, edits the file, exits; lute runs the exams.
 #
 # Turtles all the way down: a calculator ships with two bugs - add subtracts,
@@ -106,8 +106,8 @@ say "${D}  red exams are fine; lint fails only if an exam can't be run at all.${
 # ---- 3. the main event -----------------------------------------------------
 head "lute run - codex grinds until the exams pass"
 if [ -t 1 ]; then
-  say "${D}  the cockpit renders below: a loop hierarchy + a live tail of codex.${R}"
-  say "${D}  ✔ closed · ↻ in progress · ◌ untouched   ·   q detaches, run continues.${R}"
+  say "${D}  lute detaches in a real terminal; follow with: lute watch --snapshot${R}"
+  say "${D}  tail .lute/logs/<loop>.run<N>.log for the active agent transcript.${R}"
 else
   say "${D}  no TTY → plain mode: one compact line per event, log paths inline.${R}"
 fi

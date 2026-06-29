@@ -13,13 +13,12 @@ import sys
 from importlib import resources
 
 from . import cli_args, processes, schema
-from .budget import budget_pairs
 from .checks import CheckRunner
-from .cockpit import spawn_run, tui_ok
+from .detached import spawn_run, terminal_ok
 from .config import load_config
 from .context import AppContext, Paths
 from .cron import sync_or_remove, validate_schedules
-from .domain import Budget, CheckSpec, LoopId, LoopSpec, RunMode
+from .domain import Budget, CheckSpec, Gate, LoopId, LoopSpec, RunMode
 from .errors import Blocked, Gated, GitError, InternalError, LuteError, PreconditionError, UsageError
 from .events import EventBus
 from .git_repo import GitRepo
@@ -44,7 +43,7 @@ usage:
   lute run [root-id]           run loops until green (--file F, --agent CMD, --plain, --bg, --dry-run)
   lute once --until C -- TASK   one-shot, no file: run an agent until check C passes
   lute land [branch]           merge lute/<root> into [branch] iff the root exam still passes
-  lute watch [file]            read-only cockpit from events (--snapshot, --json, --filter LOG)
+  lute watch [file]            read-only event snapshot (--snapshot, --json, --filter LOG)
   lute stop                    stop the active run (and any parallel children) in this repo
   lute status [file]           may execute checks for loops without open cards, print the loop hierarchy
   lute inbox                   list what's waiting on you (blocked/gated cards)
@@ -54,7 +53,7 @@ usage:
   lute cron sync|remove        compile schedules: into a managed crontab block
 a check may exit 75 = "not yet": no agent wakes, no run budget spent; the loop
 re-asks every check_every (default 60s) while any time budget keeps ticking
-gate: human pauses a passing loop for approval · exit codes: 0 all closed,
+gate: human pauses a passing loop for approval and requires cage · exit codes: 0 all closed,
 3 blocked (needs help: lute answer), 4 gated (lute answer <loop> approve)
 new here? → lute init  (scaffold a file)  ·  lute plan "<goal>"  (an agent drafts it)
 then: lute lint  (validate)  →  lute run  (until green)
@@ -63,12 +62,12 @@ then: lute lint  (validate)  →  lute run  (until green)
 HELP = {
     "run": "lute run [root-id]: run loops until every done_when is green.\n"
     "  --file F   use manifest F (default lute.yaml)      --agent CMD  override the agent\n"
-    "  --plain    stream one line/event (no cockpit)      --bg         detach into its own session\n"
+    "  --plain    stream one line/event in foreground     --bg         detach into its own session\n"
     "  --dry-run  print the resolved plan + first prompt, spend nothing.  CLI runs select the root; children run through their parent.",
     "once": 'lute once --until "<check>" --agent <cli> -- "<task>": one-shot, no file written.\n'
     "  Runs an agent until <check> (the done_when) passes, on branch lute/<id>.\n"
     "  --id NAME  name the branch (default 'once')        --budget SPEC  e.g. \"20 runs\" or \"2h\".",
-    "watch": "lute watch [file]: read-only cockpit rendered from events.\n"
+    "watch": "lute watch [file]: read-only snapshot rendered from events.\n"
     "  --snapshot  replay events only; no checks run, free but may be stale.\n"
     "  --json      machine-readable snapshot from the same replay-only state.",
     "status": "lute status [file]: live status that may execute done_when/judge checks.\n"
@@ -283,7 +282,7 @@ def cmd_run(args: list[str]) -> int:
         proc = spawn_run(args, store, ctx.paths.runner_log)
         print(f"detached: run continues (pid {proc.pid}) · re-attach: lute watch · stop: lute stop")
         return 0
-    if not opts.get("plain") and tui_ok():
+    if not opts.get("plain") and terminal_ok():
         proc = spawn_run(args, store, ctx.paths.runner_log)
         print(f"detached: run continues (pid {proc.pid}) · re-attach: lute watch · stop: lute stop")
         return 0
@@ -385,12 +384,21 @@ def cmd_lint(args: list[str]) -> int:
         judge_cmd = ctx.config.get("judge")
         caged = bool(ctx.config.get("cage"))
 
+        budget_authority_loops: list[str] = []
+
         def walk(loop: LoopSpec, inherited: str | None) -> None:
             effective = loop.agent or inherited or default_agent
             if effective and not caged and not resolvable(effective):
                 errors.append(f"{loop.id}: agent not found: {effective}")
             elif not effective and loop.task is not None:
                 warnings.append(f"{loop.id}: has a task but no agent (agent:, --agent, or config)")
+            if loop.gate == Gate.HUMAN and not caged:
+                errors.append(
+                    f"{loop.id}: gate: human requires cage in {ctx.paths.config}; "
+                    "uncaged agents can read Lute's answer-auth key and forge approval"
+                )
+            if not caged and loop.task is not None and loop.budget.limits:
+                budget_authority_loops.append(str(loop.id))
             for pattern in loop.protected:
                 if not protected_files([pattern]):
                     warnings.append(f"{loop.id}: protected glob {pattern!r} matches no files")
@@ -424,6 +432,14 @@ def cmd_lint(args: list[str]) -> int:
                 walk(child, effective)
 
         walk(root, None)
+        if budget_authority_loops:
+            preview = ", ".join(budget_authority_loops[:5])
+            if len(budget_authority_loops) > 5:
+                preview += ", ..."
+            warnings.append(
+                "uncaged agents can read Lute's answer-auth key; answered cards can refresh budgets for "
+                f"{preview}. Configure cage if budget reset is a security boundary."
+            )
         errors.extend(validate_schedules(schedules, str(root.id)))
     for warning in warnings:
         print(f"warn: {warning}")
@@ -461,7 +477,7 @@ def cmd_init(args: list[str]) -> int:
                 "task: Replace me with instructions for one agent iteration.\n"
                 'done_when: "false"\nbudget: 10 runs\n')
     if not store.is_regular_file(ctx.paths.config):
-        store.safe_write_regular(ctx.paths.config, "# lute config\n# agent: claude -p\n# judge: codex exec\n")
+        store.safe_write_regular(ctx.paths.config, "# lute config\n# agent: claude -p\n# judge: codex exec\n# cage: docker\n")
     print("initialized lute.yaml and .lute/; set an agent (uncomment agent:, or use --agent / config), replace the task: and done_when: lines, then: lute lint")
     return 0
 
@@ -554,12 +570,9 @@ def cmd_watch(args: list[str]) -> int:
     if opts.get("json"):
         render_json(root, ctx.paths.events, runner.cards)
     else:
-        if not opts.get("snapshot") and tui_ok():
-            render_snapshot(root, ctx.paths.events)
-        else:
-            if not opts.get("snapshot"):
-                print("lute: no TTY/curses here; one-shot snapshot instead:", file=sys.stderr)
-            render_snapshot(root, ctx.paths.events)
+        if not opts.get("snapshot") and not terminal_ok():
+            print("lute: no interactive terminal here; one-shot snapshot instead:", file=sys.stderr)
+        render_snapshot(root, ctx.paths.events)
     return 0
 
 
