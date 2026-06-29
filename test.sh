@@ -177,6 +177,21 @@ EOF
   [ -f prompts/escalate-loop.run2.txt ] || die "no second agent run after answer (budget not refreshed?)"
   grep -qF 'A human reviewed the last escalation and said: Try the MAGIC-XYZZY approach instead.' \
     prompts/escalate-loop.run2.txt || die "answer text not injected into the next prompt"
+
+  mkrepo "$WORK/t4-timeout"
+  cat > lute.yaml <<EOF
+loop: timeout-loop
+agent: "true"
+task: Try again after a slow exam.
+done_when: "sleep 2"
+budget: 1 runs
+EOF
+  seal
+  rc=0; LUTE_CHECK_TIMEOUT=1 "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "timeout run exited $rc, want blocked exit 3: $(cat out.log)"
+  [ -f INBOX/timeout-loop.md ] || die "timeout loop did not create a card"
+  grep -qF 'check timed out after 1s' INBOX/timeout-loop.md \
+    || die "timeout card does not explain the check timeout: $(cat INBOX/timeout-loop.md)"
 }
 
 # ---------------------------------------------------------------- T5
@@ -1647,6 +1662,24 @@ EOF
   seal
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
   [ "$rc" -eq 3 ] || die "25e) leading-space PASS closed; first judge line must be exactly PASS: $(cat out.log)"
+
+  # --- f) judge timeouts degrade to normal escalation instead of aborting the whole run.
+  mkrepo "$WORK/t25f"
+  printf 'x\n' > essay.txt
+  mkdir -p .lute
+  printf 'agent: "true"\njudge: "sleep 2"\n' > .lute/config.yaml
+  cat > lute.yaml <<EOF
+loop: judge-timeout
+task: should not matter
+done_when: "judge: anything at all"
+budget: 1 runs
+EOF
+  seal
+  rc=0; LUTE_CHECK_TIMEOUT=1 "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "25f) judge timeout exited $rc, want blocked exit 3: $(cat out.log)"
+  [ -f INBOX/judge-timeout.md ] || die "25f) judge timeout did not create a card"
+  grep -qF 'judge timed out after 1s' INBOX/judge-timeout.md \
+    || die "25f) card does not explain the judge timeout: $(cat INBOX/judge-timeout.md)"
 }
 
 # ---------------------------------------------------------------- T26

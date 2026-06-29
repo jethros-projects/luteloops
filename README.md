@@ -457,6 +457,10 @@ and `check_every` must be positive.
 escalates immediately instead of hanging. Only a real failure's output ever
 rides into an agent prompt; silence is not evidence.
 
+A check or `judge:` command that exceeds Lute's per-check timeout counts as a
+failed exam, not an internal crash. The loop follows the normal budget path and
+eventually opens an `INBOX/` card with the timeout in the failure tail.
+
 ```yaml
 loop: deploy-quiet
 task: Investigate and fix whatever broke the deploy.
