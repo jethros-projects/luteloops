@@ -352,9 +352,10 @@ and run again. Writing good loops is a skill, literally: see
 bounded repo briefing.
 
 > **On cost:** `budget` caps *iterations* (`N runs`) and *wall-clock* (`48h`);
-> never tokens or dollars; lute can't see your agent's API spend. `lute status`
-> reports cumulative runs and agent time so you can eyeball consumption, and
-> `lute inbox` shows what's waiting on you. Set a tight `runs` budget if the bill matters.
+> never tokens or dollars; lute can't see your agent's API spend and does not
+> accept dollar budgets. `lute status` reports cumulative runs and agent time so
+> you can eyeball consumption, and `lute inbox` shows what's waiting on you.
+> Set a tight `runs` budget before walking away if the bill matters.
 
 ## Unattended runs
 
