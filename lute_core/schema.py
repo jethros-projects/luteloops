@@ -83,8 +83,8 @@ def norm_loop(node: Any, errors: list[str], seen: set[str]) -> dict[str, Any] | 
         kids = []
     check_every = node.get("check_every", "60s")
     every = parse_duration(check_every.strip()) if isinstance(check_every, str) else None
-    if every is None:
-        errors.append(f"{lid}: bad check_every {check_every!r} (use a duration like 30s, 5m, 2h)")
+    if every is None or every <= 0:
+        errors.append(f"{lid}: bad check_every {check_every!r} (use a positive duration like 30s, 5m, 2h)")
         check_every, every = "60s", 60
     gate = node.get("gate")
     if gate is not None and gate != "human":

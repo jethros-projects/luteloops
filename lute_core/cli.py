@@ -52,7 +52,8 @@ usage:
   lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
 a check may exit 75 = "not yet": no agent wakes, no run budget spent; the loop
-re-asks every check_every (default 60s) while any time budget keeps ticking
+re-asks every check_every (default 60s) while any time budget keeps ticking;
+an uncapped not-yet blocks immediately instead of hanging
 gate: human pauses a passing loop for approval and requires cage · exit codes: 0 all closed,
 3 blocked (needs help: lute answer), 4 gated (lute answer <loop> approve)
 new here? → lute init  (scaffold a file)  ·  lute plan "<goal>"  (an agent drafts it)
