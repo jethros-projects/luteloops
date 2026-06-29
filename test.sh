@@ -682,6 +682,67 @@ EOF
   [ "$rc" -eq 0 ] || die "d) lint failed on a not-yet exam with a time budget: $(cat lint.out)"
   grep -Eq '^not_yet +quiet-exam:' lint.out || die "d) capping check not classified not_yet: $(cat lint.out)"
 
+  mkrepo "$WORK/t15-d3"
+  cat > lute.yaml <<EOF
+loop: parent-watch
+agent: "$FAKE"
+task: parent should never run
+done_when: "true"
+budget: 3s
+loops:
+  - loop: child-watch
+    agent: "$FAKE"
+    task: child should never run
+    done_when: "exit 75"
+    budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "d) lint passed a runs-only not-yet child under a time-capped parent"
+  grep -q "child-watch: done_when returned 75 but budget has no time cap" lint.out \
+    || die "d) lint did not blame the uncapped child watcher: $(cat lint.out)"
+  rm -f lint.out
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "d) uncapped not-yet child exited $rc, want 3: $(cat out.log)"
+  grep -q "needs a time budget" INBOX/child-watch.md \
+    || die "d) child card does not explain the missing time budget: $(cat INBOX/child-watch.md)"
+  [ "$(grep -c '"ev": "agent_start"' .lute/events.jsonl)" -eq 0 ] \
+    || die "d) a runs-only not-yet child woke an agent"
+
+  mkrepo "$WORK/t15-d4"
+  cat > lute.yaml <<'EOF'
+loop: late-watch
+agent: "touch after_agent"
+task: make the late watcher observable
+done_when: "test -f after_agent && exit 75; exit 1"
+budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "d) lint failed before the late not-yet was observable: $(cat lint.out)"
+  grep -Eq '^fail +late-watch:' lint.out || die "d) initial late watcher check was not fail: $(cat lint.out)"
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "d) late runs-only not-yet exited $rc, want 3: $(cat out.log)"
+  grep -q "needs a time budget" INBOX/late-watch.md \
+    || die "d) late watcher card does not explain the missing time budget: $(cat INBOX/late-watch.md)"
+  [ "$(grep -c '"ev": "agent_start"' .lute/events.jsonl)" -eq 1 ] \
+    || die "d) late watcher should wake exactly one repair agent before blocking"
+
+  mkrepo "$WORK/t15-d5"
+  cat > lute.yaml <<'EOF'
+loop: zero-cadence
+agent: "true"
+task: should not matter
+done_when: "exit 75"
+check_every: 0s
+budget: 2s
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "d) lint passed check_every: 0s"
+  grep -q "bad check_every '0s'" lint.out \
+    || die "d) lint did not reject zero check_every: $(cat lint.out)"
+
   # --- e) streak: confirm 2 with 0,75,0,0 - not_yet resets the consecutive-pass streak
   mkrepo "$WORK/t15-e"
   mkcheck
@@ -1148,6 +1209,38 @@ EOF
     || die "18b) parent prompt did not name the failed child recheck: $(cat parent_prompt.txt)"
   [ "$(grep '"ev": "agent_start"' .lute/events.jsonl | grep -c '"loop": "recheck-parent"')" -eq 1 ] \
     || die "18b) expected exactly one parent repair run"
+
+  # --- c) a child recheck that becomes not-yet is still a watcher, not parent work
+  mkrepo "$WORK/t18c"
+  cat > lute.yaml <<'EOF'
+loop: recheck-watch
+agent: "touch parent_ran"
+task: should not run for a silent child watcher
+done_when: "true"
+parallel: true
+budget: 3 runs
+loops:
+  - loop: child-watch
+    agent: "true"
+    task: should not run while initially quiet
+    done_when: "test ! -f breaker.txt || exit 75"
+    check_every: 1s
+    budget: 2 runs
+  - loop: child-breaker
+    agent: "touch breaker.txt"
+    task: create the merged-tree condition that makes child-watch not-yet
+    done_when: "test -f breaker.txt"
+    budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "18c) parallel not-yet recheck exited $rc, want 3: $(cat out.log)"
+  [ -f INBOX/child-watch.md ] || die "18c) child watcher did not get the block card"
+  grep -q "needs a time budget" INBOX/child-watch.md \
+    || die "18c) child watcher card did not explain the missing time budget: $(cat INBOX/child-watch.md)"
+  [ ! -f parent_ran ] || die "18c) parent agent ran on a not-yet child recheck"
+  [ "$(grep '"ev": "agent_start"' .lute/events.jsonl | grep -c '"loop": "recheck-watch"')" -eq 0 ] \
+    || die "18c) parent repair run was started for a not-yet child recheck"
 }
 
 # ---------------------------------------------------------------- T19
@@ -1893,6 +1986,9 @@ t_t33() { # preview & help: run --dry-run shows the plan + first prompt and spen
   "$LUTE" lint --help > lh.out 2>&1 || die "33b) lint --help failed"
   grep -q 'while-loop for agents' lh.out || die "33b) lint --help didn't fall back to usage: $(cat lh.out)"
   if "$LUTE" run --help 2>&1 | grep -qi cockpit; then die "33b) help still advertises a cockpit UI"; fi
+  if git -C "$ROOT" grep -niE 'cockpit|curses|framed[ -].*tui|j/k/enter|live[- ]tail|keybindings' -- README.md luteloops lute_core > stale-ui.out; then
+    die "33b) shipped docs/source still advertise a nonexistent interactive UI: $(cat stale-ui.out)"
+  fi
 }
 
 # ---------------------------------------------------------------- T34
