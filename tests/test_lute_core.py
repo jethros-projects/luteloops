@@ -8,7 +8,7 @@ import io
 from pathlib import Path
 from unittest import mock
 
-from lute_core import cards, cli, cli_args, events, ledger, planner, processes, protection, schema
+from lute_core import cards, cli, cli_args, events, formatting, ledger, planner, processes, protection, schema
 from lute_core.cage import CageTemplate, expand_cage_template
 from lute_core.context import AppContext, Paths
 from lute_core.domain import LoopSpec
@@ -118,6 +118,15 @@ class LedgerTests(unittest.TestCase):
             {"loop": "a", "run": 3, "duration": 0.4},
         ]
         self.assertTrue(ledger.budget_spent("a", [("secs", 1)], entries, auth_for, git_runs=3))
+
+
+class FormattingTests(unittest.TestCase):
+    def test_human_duration_and_tail_helpers(self):
+        self.assertEqual(formatting.human(0), "0s")
+        self.assertEqual(formatting.human(7.9), "7s")
+        self.assertEqual(formatting.human(65), "1m05s")
+        self.assertEqual(formatting.tail("a\nb\nc", 2), "b\nc")
+        self.assertEqual(formatting.tail("", 10), "")
 
 
 class ProcessTests(unittest.TestCase):
