@@ -34,11 +34,6 @@ def fire_halt(command: str, *, loop_id: str, reason: str, card_path: str, enviro
         pass
 
 
-def human(secs: float) -> str:
-    minutes, seconds = divmod(int(secs), 60)
-    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
-
-
 class AgentRunner:
     def __init__(self, ctx: AppContext, store: StateStore, repo_root, self_cmd):
         self.ctx = ctx

@@ -14,7 +14,7 @@ import re
 import shutil
 import time
 
-from .agents import AgentRunner, human
+from .agents import AgentRunner
 from .budget import BudgetService
 from .cards import CardService
 from .checks import CheckRunner
@@ -23,6 +23,7 @@ from .context import AppContext
 from .domain import Gate, LoopSpec, Verdict
 from .errors import Blocked, Gated, PreconditionError, UsageError
 from .events import EventBus, now_iso
+from .formatting import human
 from .git_repo import GitRepo
 from .ledger import append_entry, ledger_totals, read_entries, restore_if_changed, snapshot, total_runs
 from . import processes

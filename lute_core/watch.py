@@ -9,6 +9,7 @@ import os
 from .cards import CardService
 from .domain import LoopSpec
 from .events import GLYPH_WORD, output_line, replay_events
+from .formatting import human
 
 
 def noise_filter(text: str, maxblock: int = 64) -> str:
@@ -46,11 +47,6 @@ def read_tail(path: str, max_bytes: int = 65536) -> str:
             return f.read().decode("utf-8", "replace")
     except OSError:
         return ""
-
-
-def human(secs: float) -> str:
-    minutes, seconds = divmod(int(secs), 60)
-    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
 
 
 def loop_row(depth: int, loop: LoopSpec, state: dict, root: LoopSpec) -> str:

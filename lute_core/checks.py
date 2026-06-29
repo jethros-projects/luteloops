@@ -8,6 +8,7 @@ import subprocess
 from .context import AppContext
 from .domain import CheckResult, LoopSpec, Verdict
 from .errors import UsageError
+from .formatting import tail
 from .git_repo import GitRepo
 
 CHECK_TIMEOUT = 600
@@ -32,10 +33,6 @@ def check_timeout() -> float:
 
 def timeout_label(seconds: float) -> str:
     return f"{int(seconds)}s" if float(seconds).is_integer() else f"{seconds:g}s"
-
-
-def tail(text: str, n: int) -> str:
-    return "\n".join(text.splitlines()[-n:])
 
 
 def judge_payload(rubric: str, diff: str) -> str:

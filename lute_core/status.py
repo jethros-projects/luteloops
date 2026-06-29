@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from .cards import CardService
 from .checks import CheckRunner
-from .domain import LoopSpec, Verdict
+from .domain import LoopSpec
 from .events import GLYPH_WORD, output_line
+from .formatting import human
 from .ledger import ledger_totals, read_entries, total_runs
-
-
-def human(secs: float) -> str:
-    minutes, seconds = divmod(int(secs), 60)
-    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
 
 
 def render_inbox(cards: CardService) -> None:
