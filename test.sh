@@ -813,7 +813,8 @@ EOF
   [ "$(grep -c '^READY' INBOX/gate-b.md)" -eq 1 ] || die "a) READY headers != 1: $(cat INBOX/gate-b.md)"
   grep -q "sh bcheck.sh" INBOX/gate-b.md || die "a) card lacks the passing done_when"
   grep -qF 'Approve: lute answer gate-b approve' INBOX/gate-b.md || die "a) card lacks the approve line"
-  grep -qF 'ANY answer approves and seals' INBOX/gate-b.md || die "a) card doesn't state the any-answer-seals rule"
+  grep -qF 'only this exact answer seals' INBOX/gate-b.md || die "a) card doesn't require exact approve: $(cat INBOX/gate-b.md)"
+  grep -qF 'Reject: lute answer gate-b' INBOX/gate-b.md || die "a) card lacks the reject/non-approve path: $(cat INBOX/gate-b.md)"
   [ "$(grep '"ev": "loop_closed"' .lute/events.jsonl | grep -c gate-b)" -eq 0 ] || die "a) gated loop closed itself"
   [ "$(grep '"ev": "agent_start"' .lute/events.jsonl | grep -c gate-c)" -eq 0 ] || die "a) C started before approval"
   [ ! -f c_done ] || die "a) C ran before approval"
@@ -829,6 +830,50 @@ EOF
   [ "$n1" -eq $((n0 + 1)) ] || die "b) exam not re-verified exactly once more before sealing ($n0 -> $n1)"
   [ "$(grep '"ev": "loop_closed"' .lute/events.jsonl | grep -c gate-b)" -eq 1 ] || die "b) B not sealed"
   [ -f c_done ] || die "b) C never ran after approval"
+
+  # --- b2) surrounding whitespace is okay, but the approval word must be exact after trimming
+  mkfix "$WORK/t16-b2"
+  rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 4 ] || die "b2) setup run exited $rc, want 4"
+  "$LUTE" answer gate-b $'  approve \n\t' > /dev/null || die "b2) whitespace approve answer failed"
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "b2) stripped approve did not seal: $(cat out.log)"
+  [ "$(grep '"ev": "loop_closed"' .lute/events.jsonl | grep -c gate-b)" -eq 1 ] || die "b2) stripped approve did not close gate-b"
+  [ -f c_done ] || die "b2) C did not run after stripped approve"
+
+  # --- b3) reject: any non-approve authenticated answer records a note but does not seal
+  mkfix "$WORK/t16-b3"
+  rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 4 ] || die "b3) setup run exited $rc, want 4"
+  "$LUTE" answer gate-b "no, hold this release" > /dev/null || die "b3) reject answer failed"
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 4 ] || die "b3) non-approve answer should re-gate with exit 4, got $rc: $(cat out.log)"
+  [ "$(grep '"ev": "loop_closed"' .lute/events.jsonl | grep -c gate-b)" -eq 0 ] || die "b3) B sealed after a non-approve answer"
+  [ "$(grep '"ev": "agent_start"' .lute/events.jsonl | grep -c gate-c)" -eq 0 ] || die "b3) C started after a non-approve answer"
+  [ ! -f c_done ] || die "b3) C ran after a non-approve answer"
+  grep -q '^READY' INBOX/gate-b.md || die "b3) gate did not return to READY: $(cat INBOX/gate-b.md 2>/dev/null)"
+
+  for bad in "Approve" "approve please" $'approve\nbecause'; do
+    safe=$(printf '%s' "$bad" | tr -c 'A-Za-z0-9' '_')
+    mkfix "$WORK/t16-bad-$safe"
+    rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 4 ] || die "bad approve setup exited $rc"
+    "$LUTE" answer gate-b "$bad" > /dev/null || die "bad approve answer failed"
+    rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+    [ "$rc" -eq 4 ] || die "bad approve '$bad' should not seal: $(cat out.log)"
+    [ ! -f c_done ] || die "bad approve '$bad' let C run"
+  done
+
+  mkfix "$WORK/t16-b4"
+  rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 4 ] || die "b4) setup run exited $rc, want 4"
+  "$LUTE" answer gate-b "reject this release" > /dev/null || die "b4) reject answer failed"
+  rm b_ok && git add -A && git commit -qm "world moved after reject"
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ -f prompts/gate-b.run1.txt ] || die "b4) no repair prompt after drift"
+  if grep -qF 'A human reviewed the last escalation and said: reject this release' prompts/gate-b.run1.txt; then
+    die "b4) gated reject was injected as escalation guidance"
+  fi
 
   # --- c) world drift: approval blessed a state; the state moved overnight
   mkfix "$WORK/t16-c"
@@ -1850,6 +1895,8 @@ t_t30() { # truth-telling: lute inbox lists what's waiting; status shows ✗/✋
   "$LUTE" inbox > ib.out 2>&1 || die "30c) inbox failed"
   { grep -q '✋ shipit' ib.out && grep -q 'lute answer shipit approve' ib.out; } \
     || die "30c) inbox doesn't surface the gate + approve command: $(cat ib.out)"
+  if grep -qF 'ANY answer approves' INBOX/shipit.md; then die "30c) gated card advertises stale any-answer rule"; fi
+  grep -qF 'only this exact answer seals this state' INBOX/shipit.md || die "30c) gated card lacks exact-approve rule"
   "$LUTE" status > st.out 2>&1 || die "30c) status failed"
   grep -q '✋ shipit' st.out || die "30c) status doesn't mark the gated loop ✋: $(cat st.out)"
   if grep -q '✔ shipit' st.out; then die "30c) status still shows ✔ for a gated loop (the lie): $(cat st.out)"; fi

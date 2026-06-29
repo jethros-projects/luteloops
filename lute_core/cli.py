@@ -13,6 +13,7 @@ import sys
 from importlib import resources
 
 from . import cli_args, processes, schema
+from .cards import summarize_card
 from .checks import CheckRunner
 from .detached import spawn_run, terminal_ok
 from .config import load_config
@@ -519,10 +520,22 @@ def cmd_answer(args: list[str]) -> int:
     if len(pos) != 2:
         raise UsageError('usage: lute answer <loop> "..."')
     *_, runner = make_runtime()
+    card = None
+    path = runner.cards.path(pos[0])
+    if runner.store.is_regular_file(path):
+        with open(path, encoding="utf-8") as f:
+            card = summarize_card(pos[0], f.read())
     error = runner.cards.answer_card(pos[0], pos[1])
     if error:
         raise UsageError(error)
-    print(f"answer recorded: the next run of {pos[0]} injects it and refreshes its budget once (to change it first, edit or delete {runner.cards.path(pos[0])})")
+    if card and card.kind == "ready":
+        if pos[1].strip() == "approve":
+            msg = f"answer recorded: the next run of {pos[0]} re-verifies and seals the gate if it still passes"
+        else:
+            msg = f"answer recorded: non-approve text will not seal {pos[0]}; the gate remains closed until you answer approve"
+        print(f"{msg} (to change it first, edit or delete {path})")
+    else:
+        print(f"answer recorded: the next run of {pos[0]} injects it and refreshes its budget once (to change it first, edit or delete {path})")
     return 0
 
 
