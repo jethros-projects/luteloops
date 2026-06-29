@@ -237,7 +237,7 @@ runs only the compiled proposal after you review and rename it.
 | `lute lint [file]` | validate the schema, resolve agents, and **execute every `done_when` once**, classifying each pass / fail / error; an error fails the lint, because an exam must be administrable before work begins |
 | `lute run [root-id]` | run loops depth-first until everything is green (`--agent CMD`, `--file F`, `--plain`, `--bg` to detach, `--dry-run` to preview the plan + first prompt without spending); child loops run through their parent |
 | `lute once --until C -- "task"` | one-shot, no file: run an agent until check `C` passes (`--agent`, `--id`, `--budget`) |
-| `lute watch [file]` | read-only cockpit for a running or finished run (`--snapshot` text, `--json` machine-readable) |
+| `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable) |
 | `lute status [file]` | re-run each check once and print the loop hierarchy: ✔ done / ↻ running / ⏳ waiting / ✗ blocked / ✋ gated, plus cumulative agent time |
 | `lute inbox` | list every blocked/gated loop with the exact command to answer it |
 | `lute answer <loop> "..."` | reply to a card in `INBOX/`; the next run injects it and refreshes that loop's run budget once |
@@ -372,42 +372,33 @@ Start it, walk away, get pulled back only when it needs you:
 - **Come back to it:** `lute inbox` lists what's waiting and the exact `lute answer` to type;
   `lute watch --snapshot --json` is a stable surface for a wrapping script
 
-## Cockpit
+## Run State And Watch
 
-Runs write files; renderers read files. Every agent run's full transcript
-streams live to `.lute/logs/<loop>.run<N>.log` (`tail -f` works mid-run), and
-the runner appends one JSON event per line to `.lute/events.jsonl`. In a real
-terminal, `lute run` renders a cockpit on top of those files:
+Runs write files; renderers read files. Every agent run's full transcript lands
+in `.lute/logs/<loop>.run<N>.log` (`tail -f` works mid-run), and the runner
+appends one JSON event per line to `.lute/events.jsonl`.
 
-```
-┌ lute · react-19 · run 3 · 2m14s · branch lute/react-19 ──────────┐
-│ ✔ bump-react          1 run · 41s                                │
-│ ↻ fix-build           run 1 · exam: npm run build                │
-│ ◌ react-19 (root)                                                │
-├──────────────────────────────────────────────────────────────────┤
-│ (live tail of the active run's log, noise-filtered)              │
-├──────────────────────────────────────────────────────────────────┤
-│ j/k select · enter full log · a answer card · q detach           │
-└──────────────────────────────────────────────────────────────────┘
+In a real terminal, `lute run` detaches into its own session and prints the
+process id plus the follow-up commands:
+
+```text
+detached: run continues (pid N) · re-attach: lute watch · stop: lute stop
 ```
 
-The run is a separate process in its own session; the cockpit only renders
-its files. `q` truly detaches: the cockpit exits while the run keeps going
-(`detached: run continues (pid N) · re-attach: lute watch`); Ctrl-C still
-aborts the run. `lute run --bg` is the headless twin: same parentless spawn,
-no cockpit, returns immediately, output in `.lute/logs/runner.log`; handy
-for cron and scripts. Closing the terminal does not stop a cockpit or `--bg`
-run; re-attach anytime with `lute watch`; plain foreground runs remain
-attached. `lute watch` renders the same picture read-only from a second
-terminal, derived purely from the files, so you can kill and relaunch it at
-will; `lute watch --snapshot` prints the loop hierarchy once and exits. In pipes, CI,
-or with `--plain`, there is no UI and no firehose: one compact line per
-event, with the log path for the full transcript. The middle pane collapses
-blocks of repeated agent output to a single copy with a `×N` marker. Logs,
-events, worktrees, and the run lock are runner-owned runtime state and stay out
-of your commits; journals and the ledger are durable runner files committed by
-lute after a run, with ledger writes repaired and authenticated through the
-state store.
+`lute run --bg` takes the same detached path explicitly; output from the runner
+itself lands in `.lute/logs/runner.log`, which is handy for cron and scripts.
+Use `lute run --plain` when you want a foreground process that streams one
+compact line per event and exits with the run result.
+
+`lute watch` is read-only and replay-only: it renders the current loop hierarchy
+once from `.lute/events.jsonl`, without re-running checks. `lute watch --json`
+emits the same replay state for wrappers, dashboards, and cron probes. To inspect
+the active agent transcript, tail the log path named by the stream or event file;
+`lute watch --filter .lute/logs/<loop>.run<N>.log` prints that log with repeated
+blocks collapsed to a single copy with a `×N` marker. Logs, events, worktrees,
+and the run lock are runner-owned runtime state and stay out of your commits;
+journals and the ledger are durable runner files committed by Lute after a run,
+with ledger writes repaired and authenticated through the state store.
 
 ## Parallel siblings (`parallel: true`)
 
@@ -471,8 +462,8 @@ budget: 48h
 
 Combine the trio: a not-yet check, `lute run --bg`, and `lute cron sync`,
 and lute is a monitor that costs ~nothing while things are healthy and spends
-exactly one agent run per real problem. The cockpit, `watch`, and plain mode
-show waiting loops as ⏳ (`⏳ deploy-quiet: not yet · next check in 30m`),
+exactly one agent run per real problem. The event stream, `watch`, and plain
+mode show waiting loops as ⏳ (`⏳ deploy-quiet: not yet · next check in 30m`),
 and `lute lint` classifies a 75 dry-run as `not_yet`: a valid, lint-passing
 outcome.
 
@@ -494,6 +485,13 @@ loops:
     task: npm publish, then verify.
     done_when: "npm view mypkg version | grep -qx 1.4.0"
 ```
+
+Because approval is authenticated by a key under `~/.lute/keys/`, `gate: human`
+requires a configured `cage:`. Without a cage, the agent runs as your user and
+can read the answer-auth key, so it can forge the approval token. `lute lint`
+reports this as an error, and `lute run` refuses a gated manifest before work
+starts. Use the cage even if the host has no other secrets; for gates, it is the
+trust anchor, not just a convenience.
 
 Approve with `lute answer release-ready approve` (any answer text counts;
 the word is convention, the text is recorded). On the next run the exam is
@@ -570,6 +568,11 @@ enters read-only through `cage_mounts`, by name, never implicitly.
 `@openai/codex` + `git`). The initial release boundary is **filesystem +
 secrets isolation**. Network egress control is a later notch: a caged
 container can still reach the network.
+
+The same isolation protects Lute's own answer-auth key. Answered cards can
+refresh a loop's budget once, and gated cards seal human approval. If agents are
+uncaged, those mechanisms are useful operator workflow, not adversarial security
+boundaries; `lint` warns for budget-refreshable loops and errors for human gates.
 
 ## Schedules (cron, not a daemon)
 

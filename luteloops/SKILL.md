@@ -39,6 +39,12 @@ but runner configuration belongs outside `lute.yaml`: `cage:` lives in
 untrusted code or host-secret isolation. `done_when` checks still run as host
 checks; do not hide check logic in cage setup.
 
+Human approval is authenticated with a local answer key. If a manifest uses
+`gate: human`, require a cage in `.lute/config.yaml`; uncaged agents run as the
+user and can read that key. Answered cards also refresh budgets once, so budget
+resets are not an adversarial security boundary unless the model-facing commands
+are caged.
+
 When invoked through `lute plan --dag`, use a workflow DAG only as a planning
 aid: identify checkable milestone nodes, prerequisite edges, fan-out/fan-in,
 and possible concurrency, then compile that reasoning into normal Lute YAML.
@@ -115,7 +121,7 @@ A loop that closes on a judge is closed-ish. If it sits near anything irreversib
 
 ## 6. Budgets and knobs
 
-**Gate any loop that immediately precedes an irreversible verb** (deploy, publish, send, migrate): the gate guards readiness, the next loop performs the act - list order does the rest.
+**Gate any loop that immediately precedes an irreversible verb** (deploy, publish, send, migrate): the gate guards readiness, the next loop performs the act - list order does the rest. A gated manifest must also configure `cage:` in `.lute/config.yaml`; otherwise lint and run refuse it because an uncaged agent can read the answer-auth key and forge approval.
 
 **Mark a parent `parallel: true` only when its children touch disjoint files/resources** (independent services, separate modules) and each takes real time. They run at once in separate worktrees and merge back, so an overlap is a real merge conflict that escalates, not auto-resolves. A DAG with independent-looking nodes is not enough:
 
