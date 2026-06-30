@@ -164,7 +164,8 @@ class CardService:
         path = self.path(lid)
         text = open(path).read() if self.store.is_regular_file(path) else ""
         if not re.search(r"^READY", text, re.M):
-            diffstat = self.git.text("diff", "--stat", self.git.branch_base() + "...HEAD")
+            base = self.ctx.trusted_base or self.git.branch_base()
+            diffstat = self.git.text("diff", "--stat", base + "...HEAD")
             self.raise_gate(
                 lid,
                 text + f"READY: exam passing, awaiting your approval\n"
