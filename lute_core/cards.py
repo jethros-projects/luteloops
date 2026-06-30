@@ -116,6 +116,27 @@ class CardService:
         self.git.shared_text(self.ctx.shared_root, "commit", "-q", "-m", f"lute({loop_id}): answer")
         return None
 
+    def write_card(self, lid: str, text: str, commit_msg: str) -> str:
+        path = self.path(lid)
+        self.store.safe_write_regular(path, text)
+        self.git.shared_text(self.ctx.shared_root, "add", path)
+        self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", commit_msg)
+        return path
+
+    def raise_block(self, lid: str, text: str, commit_msg: str, *, message: str = "blocked", **event_fields) -> None:
+        path = self.write_card(lid, text, commit_msg)
+        self.events.emit("escalated", lid, card=f"INBOX/{lid}.md", **event_fields)
+        self.fire_halt(lid, "blocked", path)
+        raise Blocked(message)
+
+    def raise_gate(self, lid: str, text: str | None = None, commit_msg: str | None = None) -> None:
+        path = self.path(lid)
+        if text is not None and commit_msg is not None:
+            path = self.write_card(lid, text, commit_msg)
+        self.events.emit("gated", lid, card=f"INBOX/{lid}.md")
+        self.fire_halt(lid, "gated", path)
+        raise Gated()
+
     def escalate(self, loop: LoopSpec, tail_text: str, note: str = "") -> None:
         lid = str(loop.id)
         runs, secs = runs_since_authenticated_answer(self.ledger_entries(), lid, self.authority.token)
@@ -130,12 +151,7 @@ class CardService:
             f"→ One question, stated by the runner: what should change?\n"
             f'Answer with: lute answer {lid} "..."\n'
         )
-        self.store.safe_write_regular(self.path(lid), text)
-        self.git.shared_text(self.ctx.shared_root, "add", self.path(lid))
-        self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): escalate")
-        self.events.emit("escalated", lid, card=f"INBOX/{lid}.md")
-        self.fire_halt(lid, "blocked", self.path(lid))
-        raise Blocked()
+        self.raise_block(lid, text, f"lute({lid}): escalate")
 
     def supersede(self, loop_id: str, approved: bool) -> None:
         path = self.path(loop_id)
@@ -149,17 +165,14 @@ class CardService:
         text = open(path).read() if self.store.is_regular_file(path) else ""
         if not re.search(r"^READY", text, re.M):
             diffstat = self.git.text("diff", "--stat", self.git.branch_base() + "...HEAD")
-            self.store.safe_write_regular(
-                path,
+            self.raise_gate(
+                lid,
                 text + f"READY: exam passing, awaiting your approval\n"
                 f"Check: {loop.done_when.command}\n"
                 f"Diff:\n{diffstat}"
                 f"Approve: lute answer {lid} approve   (only this exact answer seals this state)\n"
                 f"Reject: lute answer {lid} \"...\" records your note but does not seal; "
                 f"change files and re-run if needed\n",
+                f"lute({lid}): gated",
             )
-            self.git.shared_text(self.ctx.shared_root, "add", self.path(lid))
-            self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): gated")
-        self.events.emit("gated", lid, card=f"INBOX/{lid}.md")
-        self.fire_halt(lid, "gated", path)
-        raise Gated()
+        self.raise_gate(lid)

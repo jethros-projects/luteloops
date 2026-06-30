@@ -113,13 +113,7 @@ def trusted_merge_escalate(runner, parent: LoopSpec, child: LoopSpec, paths: lis
         f"The parent branch was left clean; inspect child quarantine records with `lute quarantine list`.\n"
         f"Resolve: make exam changes explicitly as reviewed work, or remove them from the child branch and re-run.\n"
     )
-    path = runner.cards.path(lid)
-    runner.store.safe_write_regular(path, text)
-    runner.git.shared_text(runner.ctx.shared_root, "add", path)
-    runner.git.shared_text(runner.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): trusted merge blocked")
-    runner.events.emit("escalated", lid, card=f"INBOX/{lid}.md", trusted=paths)
-    runner.agents.fire_halt(lid, "blocked", path)
-    raise Blocked()
+    runner.cards.raise_block(lid, text, f"lute({lid}): trusted merge blocked", trusted=paths)
 
 
 def merge_escalate(runner, parent: LoopSpec, child: LoopSpec, merged: list[str], conflicts: list[str]) -> None:
@@ -131,25 +125,20 @@ def merge_escalate(runner, parent: LoopSpec, child: LoopSpec, merged: list[str],
         f"The parent branch was left clean (merge aborted); no broken commit exists.\n"
         f"Resolve: make the children touch disjoint regions (or merge by hand), then re-run.\n"
     )
-    path = runner.cards.path(lid)
-    runner.store.safe_write_regular(path, text)
-    runner.git.shared_text(runner.ctx.shared_root, "add", path)
-    runner.git.shared_text(runner.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): merge conflict")
-    runner.events.emit("escalated", lid, card=f"INBOX/{lid}.md", conflict=conflicts)
-    runner.agents.fire_halt(lid, "blocked", path)
-    raise Blocked()
+    runner.cards.raise_block(lid, text, f"lute({lid}): merge conflict", conflict=conflicts)
 
 
 def run_parallel(runner, parent: LoopSpec, agents_by_loop: dict[str, str | None]) -> None:
     head = runner.git.head()
     pending = [
-        child
-        for child in parent.children
+        (index, child)
+        for index, child in enumerate(parent.children, 1)
         if child.children or child.gate or runner.checks.run(child, lenient=True).verdict.value != "pass"
     ]
     if pending:
-        reap_orphans(runner, pending)
-        procs = [(child, spawn_child(runner, child, ensure_worktree(runner, child, head), index)) for index, child in enumerate(pending, 1)]
+        pending_children = [child for _, child in pending]
+        reap_orphans(runner, pending_children)
+        procs = [(child, spawn_child(runner, child, ensure_worktree(runner, child, head), slot)) for slot, child in pending]
         runner.events.emit("parallel", str(parent.id), children=[str(child.id) for child, _ in procs])
         results = join_children(procs)
         codes = [code for _, code in results if code != 0]
