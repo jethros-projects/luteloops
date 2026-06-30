@@ -100,14 +100,6 @@ class GitRepo:
         result = subprocess.run(["git", "-C", cwd or self.root, "show", ref_path], capture_output=True)
         return result.stdout if result.returncode == 0 else None
 
-    def show_text(self, ref_path: str, cwd: str | None = None) -> str | None:
-        raw = self.show_bytes(ref_path, cwd=cwd)
-        return raw.decode("utf-8", "replace") if raw is not None else None
-
-    def ls_tree_files(self, ref: str, cwd: str | None = None) -> list[str]:
-        out = self.text("ls-tree", "-r", "--name-only", ref, cwd=cwd)
-        return out.splitlines()
-
     def clear_stale_locks(self, cwd: str | None = None) -> None:
         locks = ["index.lock", "HEAD.lock"]
         ref = self.text("rev-parse", "--symbolic-full-name", "HEAD", cwd=cwd).strip()
@@ -157,10 +149,6 @@ class GitRepo:
 
     def restore_path(self, ref: str, path: str, cwd: str | None = None) -> bool:
         return self.ok("checkout", "-q", ref, "--", path, cwd=cwd)
-
-    def restore_paths_from_ref(self, ref: str, paths: list[str], cwd: str | None = None) -> None:
-        if paths:
-            self.text("checkout", "-q", ref, "--", *paths, cwd=cwd)
 
     def commit(self, message: str, *, allow_empty: bool = False) -> None:
         args = ["commit", "-q"]

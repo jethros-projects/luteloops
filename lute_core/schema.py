@@ -130,4 +130,4 @@ def load(path: str) -> tuple[LoopSpec | None, list[dict[str, Any]], list[str]]:
         errors.append("schedules: must be a list")
         schedules = []
     raw = norm_loop(doc, errors, set())
-    return (LoopSpec.from_legacy_dict(raw) if raw else None), schedules, errors
+    return (LoopSpec.from_normalized(raw) if raw else None), schedules, errors
