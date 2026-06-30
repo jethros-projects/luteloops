@@ -21,7 +21,7 @@ def render_inbox(cards: CardService) -> None:
 
 
 def render_status(root: LoopSpec, checks: CheckRunner, cards: CardService, ledger_path: str) -> None:
-    print("lute status: may execute done_when/judge checks for loops without open cards (not replay-only)")
+    print("lute status: may execute done_when/judge checks for loops without unanswered cards (not replay-only)")
     waiting = {card["lid"]: card for card in cards.open_cards() if not card["answered"]}
 
     def walk(loop: LoopSpec, depth: int) -> str:

@@ -127,7 +127,7 @@ class Runner:
         if self.git.status_porcelain("-uno").strip():
             self.git.text("reset", "-q", "--hard")
         self.ctx.run_pre_untracked = self.git.untracked()
-        self.ctx.trusted_base = self.git.branch_base()
+        self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
         freeze_config(self.ctx, self.git)
         self.require_human_authority_cage(target)
         self.run_loop(target, agents_by_loop)
@@ -190,15 +190,7 @@ class Runner:
             return None
         for slot, child in enumerate(loop.children, 1):
             baseline = self.protection.baseline(child)
-            old_slot = os.environ.get("LUTE_SLOT")
-            os.environ["LUTE_SLOT"] = str(slot)
-            try:
-                verdict, tail_text = self.administer_check(child, baseline, 0)
-            finally:
-                if old_slot is None:
-                    os.environ.pop("LUTE_SLOT", None)
-                else:
-                    os.environ["LUTE_SLOT"] = old_slot
+            verdict, tail_text = self.administer_check(child, baseline, 0, env=dict(os.environ, LUTE_SLOT=str(slot)))
             if verdict == Verdict.NOT_YET:
                 return child, verdict, tail_text
             if verdict != Verdict.PASS:
@@ -209,10 +201,10 @@ class Runner:
                 )
         return None
 
-    def administer_check(self, loop: LoopSpec, baseline, passes: int) -> tuple[Verdict, str]:
+    def administer_check(self, loop: LoopSpec, baseline, passes: int, env: dict[str, str] | None = None) -> tuple[Verdict, str]:
         loop_id = str(loop.id)
         self.enforce_quarantine(loop, "precheck", baseline)
-        result = self.checks.run(loop)
+        result = self.checks.run(loop, env=env)
         verdict, tail_text = result.verdict, result.output
         tampered = sorted(self.quarantine_paths.get(loop_id, set()))
         postcheck = self.enforce_quarantine(loop, "postcheck", baseline)

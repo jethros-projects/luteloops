@@ -234,11 +234,11 @@ runs only the compiled proposal after you review and rename it.
 | verb | what it does |
 |---|---|
 | `lute init` | scaffold a `lute.yaml` and `.lute/` (or `lute init --skill` to write a local copy of the packaged luteloops skill) |
-| `lute lint [file]` | validate the schema, resolve agents, and **execute every `done_when` once**, classifying each pass / fail / error / not-yet; an error fails the lint, because an exam must be administrable before work begins |
+| `lute lint [file]` | validate the schema, resolve agents, and **execute every `done_when` once** except caged judge checks, which are reported as skipped; classify each pass / fail / error / not-yet / skipped; an error fails the lint, because an exam must be administrable before work begins |
 | `lute run [root-id]` | run loops depth-first until everything is green (`--agent CMD`, `--file F`, `--plain`, `--bg` to detach, `--dry-run` to preview, `--skip-if-running` for cron overlap); child loops run through their parent |
 | `lute once --until C -- "task"` | one-shot, no file: run an agent until check `C` passes (`--agent`, `--id`, `--budget`) |
 | `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable) |
-| `lute status [file]` | re-run each check once and print the loop hierarchy: ✔ done / ↻ running / ⏳ waiting / ✗ blocked / ✋ gated, plus cumulative agent time |
+| `lute status [file]` | re-run each check once for loops without an unanswered card and print the loop hierarchy: ✔ done / ↻ running / ⏳ waiting / ✗ blocked / ✋ gated, plus cumulative agent time |
 | `lute inbox` | list every blocked/gated loop with the exact command to answer it |
 | `lute answer <loop> "..."` | reply to a card in `INBOX/`; blocked-loop answers are injected into the next run, while gated loops seal only on exact `approve` |
 | `lute quarantine [list|diff <id>|drop <id>|drop --all]` | inspect or remove stored patches for trusted exam/control edits that Lute quarantined out of run commits |
@@ -284,11 +284,11 @@ pure projection of events (no rechecks). Its shape is stable:
   "root": "build",            // root loop id
   "outcome": "blocked",       // running | closed | blocked | gated: the canonical verdict
   "exit": 3,                  // matching exit int; null while outcome is "running"
-  "ended": true,              // a run_end event was seen
+  "ended": false,             // true only after a run_end event; blocked/gated runs may halt first
   "branch": "lute/build",
   "tree": { "id": "build", "word": "blocked", "runs": 2, "secs": 41.0, "active": false,
             "children": [ /* same shape, recursively */ ] },
-  "cards": [ { "lid": "build", "gated": false, "answered": false, "next": "lute answer build \"...\"" } ]
+  "cards": [ { "lid": "build", "gated": false, "answered": false, "summary": "BLOCKED: ...", "next": "lute answer build \"...\"" } ]
 }
 ```
 
@@ -301,6 +301,10 @@ created during that run; it leaves pre-existing untracked clutter and `INBOX/` c
 agent's **exit code is logged but never trusted**; the *only* verdict is the runner re-running
 `done_when`. That is why lute can't lie about doneness, and why your wrapper need not produce a
 meaningful exit code.
+
+A circular exam can still pass by echoing the task string back into a file, so it
+measures obedience rather than behavior. Prefer tests, builds, protected fixtures, or ground
+truth the worker does not author.
 
 **State ownership:** normal repo content outside `.lute/` and `INBOX/` is agent-owned work
 product. Runner-owned state is `.lute/config.yaml`, `.lute/ledger.jsonl`, `.lute/events.jsonl`,
@@ -340,7 +344,7 @@ loops:
 Then:
 
 ```sh
-lute lint     # every exam is executed once before any work starts
+lute lint     # exams are dry-run before work starts; caged judge checks are reported as skipped
 lute run      # grinds on branch lute/react-19, one commit per iteration
 lute status   # ✔ done / ↻ in progress / ◌ untouched
 ```
@@ -503,8 +507,10 @@ reports this as an error, and `lute run` refuses a gated manifest before work
 starts. Use the cage even if the host has no other secrets; for gates, it is the
 trust anchor, not just a convenience.
 This is a different trust base from exam-pass integrity: host-side checks and
-protected exams still work for uncaged agents, but human approval and answered
-card budget refresh assume a real isolating cage.
+protected exams cover ordinary uncaged runs, and Lute reaps the agent's process
+group before checking, but uncaged code is still host code and can deliberately
+daemonize outside that group. Use a real cage for adversarial containment;
+human approval and answered-card budget refresh require it.
 
 Approve with `lute answer release-ready approve`; after trimming whitespace,
 the answer text must be exactly `approve` to seal. On the next run the exam is
@@ -585,9 +591,9 @@ and what `cage_mounts` names, so `~/.ssh` and your environment simply aren't
 there. The image is yours to build: it must contain your agent CLI, and auth
 enters read-only through `cage_mounts`, by name, never implicitly.
 `contrib/cage/Dockerfile` is a worked Codex sample (`node:20-slim` +
-`@openai/codex` + `git`). The initial release boundary is **filesystem +
-secrets isolation**. Network egress control is a later notch: a caged
-container can still reach the network.
+`@openai/codex` + `git`). The built-in `cage: docker` template also sets
+`--network none` by default. Custom cage templates are operator-owned: include
+the equivalent egress restriction yourself if network isolation matters.
 
 The same isolation protects Lute's own answer-auth key. Answered cards can
 refresh a loop's budget once, and gated cards seal human approval. If agents are
@@ -621,6 +627,6 @@ fast-check-first (parallel siblings are opt-in per parent, but a lone loop still
 runs as one plain process). `lute plan --dag` does not add runtime DAG syntax,
 automatic graph scheduling, or a `depends_on` manifest key. The verdict cache,
 cron-resumed ticks on an always-on box, merge gates, agent-resolved merge
-conflicts, registry, and cage network egress control are deliberately outside
-the initial release. They should enter only when a real loop fails without them,
-and only if they add no required fields.
+conflicts, registry, and richer cage policy are deliberately outside the initial
+release. They should enter only when a real loop fails without them, and only if
+they add no required fields.
