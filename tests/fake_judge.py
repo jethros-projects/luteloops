@@ -14,11 +14,25 @@ deterministically, PASS/FAIL on the first line as the protocol demands:
     fake_judge.py --safe-pass-if SUBSTR
                                       PASS iff safe payload shape is present
                                       and SUBSTR occurs in the payload
+    fake_judge.py --ambient-claude-pass
+                                      PASS iff ./CLAUDE.md tells the judge to
+                                      print PASS (simulates project memory)
+    fake_judge.py --exit-code N      exit with N after printing the verdict
 """
+import os
 import sys
 
 payload = sys.stdin.read()
 args = sys.argv[1:]
+
+exit_code = 0
+if "--exit-code" in args:
+    idx = args.index("--exit-code")
+    try:
+        exit_code = int(args[idx + 1])
+    except (IndexError, ValueError):
+        exit_code = 2
+    del args[idx:idx + 2]
 
 
 def safe_payload() -> bool:
@@ -61,6 +75,16 @@ elif args[:1] == ["--safe-pass-if"] and len(args) > 1:
 elif args[:1] == ["--verdict"] and len(args) > 1:
     print("Well, let me think about it..." if args[1] == "GARBAGE" else args[1])
     print("- reasoning, citing file:1")
+elif args[:1] == ["--ambient-claude-pass"]:
+    try:
+        ambient = open("CLAUDE.md", encoding="utf-8").read()
+    except OSError:
+        ambient = ""
+    ok = "print PASS" in ambient
+    print("PASS" if ok else "FAIL")
+    print("- ambient CLAUDE.md instruction: %s (cite: cwd/CLAUDE.md)" % ("present" if ok else "absent"))
 else:
     print("FAIL")
     print("- no instruction given to fake_judge")
+
+sys.exit(exit_code)
