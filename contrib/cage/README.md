@@ -1,10 +1,9 @@
 # The cage - a sample image
 
-`cage: docker` runs every command lute spawns **on behalf of a model** - the
-per-loop agents and any `judge:` command - inside a container. `done_when`
-checks never enter the cage; they are yours and run on the host. The container
-sees only your repo (read-write at `/work`) and the host paths you name in
-`cage_mounts` (read-only). Everything else - `~/.ssh`, your shell environment,
+`cage: docker` runs every command lute spawns **on behalf of a model** inside a
+container. Agents see only your repo (read-write at `/work`) and the host paths
+you name in `cage_mounts` (read-only); judges see only an empty working directory and the stdin diff. `done_when` checks never enter the cage; they are
+yours and run on the host. Everything else - `~/.ssh`, your shell environment,
 the rest of your disk - simply isn't there. Isolation is **by absence**.
 
 ## The one rule
@@ -58,7 +57,8 @@ secret can't be read if it was never mounted.
 
 ## The Initial Release Boundary
 
-The built-in `cage: docker` template isolates **filesystem and secrets** and
-sets Docker `--network none` by default. Custom templates are your policy
-surface: include the equivalent no-network flag yourself if egress isolation
-matters. Mount only what the agent needs, and only read-only.
+The built-in `cage: docker` template isolates **filesystem and secrets**. It
+can still reach the network so model CLIs can call their APIs. Custom templates
+are your policy surface: include the egress restriction yourself, such as
+Docker `--network none`, if network isolation matters. Mount only what the
+agent needs, and only read-only.

@@ -13,6 +13,7 @@ from lute_core.cage import DEFAULT_CAGE_TEMPLATE, CageTemplate, expand_cage_temp
 from lute_core.config import freeze_config, load_config
 from lute_core.context import AppContext, Paths
 from lute_core.domain import LoopSpec, RunMode
+from lute_core.errors import Gated
 from lute_core.git_repo import GitRepo
 from lute_core.state_store import StateStore
 
@@ -184,7 +185,9 @@ class ProcessTests(unittest.TestCase):
                 os.chdir(td)
                 paths = Paths.for_repo(td)
                 os.makedirs(paths.state)
+                os.makedirs(paths.worktrees)
                 Path(paths.lock).write_text('{"pid": 12345, "start": "x"}')
+                Path(paths.worktrees, "child.pid").write_text("456\nmarker")
                 out, err = io.StringIO(), io.StringIO()
                 with mock.patch.object(processes, "command_contains", return_value=True), \
                      mock.patch.object(processes, "serves_repo", return_value=None), \
@@ -194,9 +197,31 @@ class ProcessTests(unittest.TestCase):
                 self.assertEqual(rc, 1)
                 self.assertTrue(Path(paths.lock).exists())
                 self.assertNotIn("stale lock", out.getvalue())
-                stop_group.assert_not_called()
+                self.assertIn("try: kill", err.getvalue())
+                stop_group.assert_called_once_with(456)
             finally:
                 os.chdir(old)
+
+    def test_stop_parallel_child_runs_uses_recorded_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = Paths.for_repo(td)
+            os.makedirs(paths.worktrees)
+            Path(paths.worktrees, "child.pid").write_text("456\nold-entrypoint")
+            seen: list[tuple[int, str]] = []
+
+            def command_contains(pid, needle):
+                seen.append((pid, needle))
+                return pid == 456 and needle == "old-entrypoint"
+
+            with mock.patch.object(processes, "command_contains", side_effect=command_contains), \
+                 mock.patch.object(cli, "stop_recorded_agent") as stop_agent, \
+                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
+                self.assertEqual(cli.stop_parallel_child_runs(AppContext(td, paths, {}, "", "root", RunMode.FILE), "current-entry"), 1)
+
+            self.assertIn((456, "current-entry"), seen)
+            self.assertIn((456, "old-entrypoint"), seen)
+            stop_agent.assert_called_once()
+            stop_group.assert_called_once_with(456)
 
 
 class CardAndEventTests(unittest.TestCase):
@@ -214,8 +239,46 @@ class CardAndEventTests(unittest.TestCase):
                 f.write(json.dumps({"ts": "2", "ev": "loop_closed", "loop": "r"}) + "\n")
                 f.write(json.dumps({"ts": "3", "ev": "run_end", "loop": "r"}) + "\n")
             state = events.replay_events(path)
-        self.assertTrue(state["ended"])
-        self.assertEqual(state["loops"]["r"]["mark"], "✔")
+            self.assertTrue(state["ended"])
+            self.assertEqual(state["loops"]["r"]["mark"], "✔")
+
+    def test_gate_halt_diffstat_uses_trusted_base(self):
+        class FakeGit:
+            def __init__(self):
+                self.diff_args = None
+
+            def branch_base(self):
+                return "wrong-base"
+
+            def text(self, *args):
+                self.diff_args = args
+                return " diffstat\n"
+
+        class CaptureCards(cards.CardService):
+            def __init__(self, ctx, git):
+                self.ctx = ctx
+                self.store = StateStore(ctx.paths)
+                self.git = git
+                self.captured = ""
+
+            def raise_gate(self, lid, text=None, commit_msg=None):
+                self.captured = text or ""
+                raise Gated()
+
+        with tempfile.TemporaryDirectory() as td:
+            paths = Paths.for_repo(td)
+            os.makedirs(paths.inbox)
+            ctx = AppContext(td, paths, {}, os.path.join(td, "lute.yaml"), "gate", RunMode.FILE)
+            ctx.trusted_base = "trusted-base"
+            git = FakeGit()
+            svc = CaptureCards(ctx, git)
+            loop = LoopSpec.from_normalized({"id": "gate", "done_when": "true", "budget": []})
+
+            with self.assertRaises(Gated):
+                svc.gate_halt(loop)
+
+            self.assertEqual(git.diff_args, ("diff", "--stat", "trusted-base...HEAD"))
+            self.assertIn("diffstat", svc.captured)
 
 
 class CageTests(unittest.TestCase):
@@ -239,8 +302,8 @@ class CageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must contain"):
             CageTemplate("echo nope").expand("/repo", "img", [], "true")
 
-    def test_default_cage_template_restricts_network(self):
-        self.assertIn("--network none", DEFAULT_CAGE_TEMPLATE)
+    def test_default_cage_template_leaves_egress_to_operator_policy(self):
+        self.assertNotIn("--network none", DEFAULT_CAGE_TEMPLATE)
 
 
 class CliAndProtectionTests(unittest.TestCase):

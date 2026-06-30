@@ -14,7 +14,7 @@ from . import processes
 from .state_store import StateStore
 
 
-def run_agent_command(command: str, prompt: str, log_path: str) -> tuple[float, int]:
+def run_agent_command(command: str, prompt: str, log_path: str, pid_path: str | None = None) -> tuple[float, int | None]:
     started = time.time()
     with open(log_path, "w") as log:
         proc = subprocess.Popen(
@@ -25,11 +25,20 @@ def run_agent_command(command: str, prompt: str, log_path: str) -> tuple[float, 
             stderr=log,
             start_new_session=True,
         )
+        if pid_path:
+            os.makedirs(os.path.dirname(pid_path), exist_ok=True)
+            with open(pid_path, "w", encoding="utf-8") as f:
+                f.write(str(proc.pid))
         try:
             proc.communicate(prompt)
         finally:
             processes.stop_group(proc.pid)
-    return round(time.time() - started, 3), proc.returncode if proc.returncode is not None else -1
+            if pid_path:
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
+    return round(time.time() - started, 3), proc.returncode
 
 
 def fire_halt(command: str, *, loop_id: str, reason: str, card_path: str, environ: dict[str, str] | None = None) -> None:
@@ -85,11 +94,12 @@ class AgentRunner:
             ) + prompt
         return prompt
 
-    def spawn(self, loop: LoopSpec, agent_command: str, prompt: str, log_path: str) -> tuple[float, int]:
+    def spawn(self, loop: LoopSpec, agent_command: str, prompt: str, log_path: str) -> tuple[float, int | None]:
         self.store.ensure_layout()
         journal_path = os.path.join(self.ctx.paths.journal, f"{loop.id}.md")
         before = os.path.getmtime(journal_path) if os.path.exists(journal_path) else None
-        duration, returncode = run_agent_command(self.cage_wrap(agent_command), prompt, log_path)
+        pid_path = os.path.join(self.ctx.paths.state, "agents", f"{os.getpid()}.pid")
+        duration, returncode = run_agent_command(self.cage_wrap(agent_command), prompt, log_path, pid_path)
         after = os.path.getmtime(journal_path) if os.path.exists(journal_path) else None
         self.ctx.nagged[str(loop.id)] = before == after
         return duration, returncode

@@ -17,6 +17,7 @@ deterministically, PASS/FAIL on the first line as the protocol demands:
     fake_judge.py --ambient-claude-pass
                                       PASS iff ./CLAUDE.md tells the judge to
                                       print PASS (simulates project memory)
+    fake_judge.py --stderr-warning   emit a harmless stderr line before verdict
     fake_judge.py --exit-code N      exit with N after printing the verdict
 """
 import os
@@ -26,6 +27,10 @@ payload = sys.stdin.read()
 args = sys.argv[1:]
 
 exit_code = 0
+stderr_warning = False
+if "--stderr-warning" in args:
+    stderr_warning = True
+    args.remove("--stderr-warning")
 if "--exit-code" in args:
     idx = args.index("--exit-code")
     try:
@@ -33,6 +38,9 @@ if "--exit-code" in args:
     except (IndexError, ValueError):
         exit_code = 2
     del args[idx:idx + 2]
+
+if stderr_warning:
+    print("docker warning: swap limit support is disabled", file=sys.stderr)
 
 
 def safe_payload() -> bool:

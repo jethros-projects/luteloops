@@ -97,7 +97,13 @@ def merge_all(runner, parent: LoopSpec, results) -> None:
         trusted_changes = runner.protection.changed_paths_at_ref(baseline, child_branch(runner, child))
         if trusted_changes:
             trusted_merge_escalate(runner, parent, child, trusted_changes)
-        result = runner.git.merge("--no-edit", child_branch(runner, child), check=False)
+        result = runner.git.merge(
+            "--no-edit",
+            "-m",
+            f"lute({parent.id}): merge {child.id}",
+            child_branch(runner, child),
+            check=False,
+        )
         if result.returncode:
             conflicts = runner.git.text("diff", "--name-only", "--diff-filter=U").split()
             runner.git.ok("merge", "--abort")
