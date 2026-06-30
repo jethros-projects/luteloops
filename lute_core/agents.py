@@ -10,20 +10,26 @@ from .cage import DEFAULT_CAGE_TEMPLATE, expand_cage_template
 from .context import AppContext
 from .domain import LoopSpec
 from .errors import UsageError
+from . import processes
 from .state_store import StateStore
 
 
 def run_agent_command(command: str, prompt: str, log_path: str) -> tuple[float, int]:
     started = time.time()
     with open(log_path, "w") as log:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["sh", "-c", command],
-            input=prompt,
+            stdin=subprocess.PIPE,
             encoding="utf-8",
             stdout=log,
             stderr=log,
+            start_new_session=True,
         )
-    return round(time.time() - started, 3), result.returncode
+        try:
+            proc.communicate(prompt)
+        finally:
+            processes.stop_group(proc.pid)
+    return round(time.time() - started, 3), proc.returncode if proc.returncode is not None else -1
 
 
 def fire_halt(command: str, *, loop_id: str, reason: str, card_path: str, environ: dict[str, str] | None = None) -> None:
@@ -41,16 +47,16 @@ class AgentRunner:
         self.repo_root = repo_root
         self.self_cmd = self_cmd
 
-    def cage_wrap(self, command: str) -> str:
+    def cage_wrap(self, command: str, repo_root: str | None = None) -> str:
         cfg = self.ctx.active_config()
         cage = cfg.get("cage")
         if not cage:
             return command
-        template = (self.ctx.cage_template or DEFAULT_CAGE_TEMPLATE) if cage == "docker" else cage
+        template = DEFAULT_CAGE_TEMPLATE if cage == "docker" else cage
         try:
             return expand_cage_template(
                 template,
-                self.repo_root,
+                repo_root or self.repo_root,
                 cfg.get("cage_image", "alpine:3"),
                 cfg.get("cage_mounts"),
                 command,

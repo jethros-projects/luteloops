@@ -41,13 +41,13 @@ USAGE = """\
 lute: a while-loop for agents
 usage:
   lute init [--skill]          scaffold a lute.yaml and .lute/ (--skill: write a local copy of the skill)
-  lute lint [file]             validate schema + dry-run every done_when once
+  lute lint [file]             validate schema + dry-run checks (caged judges skipped)
   lute run [root-id]           run loops until green (--file F, --agent CMD, --plain, --bg, --dry-run)
   lute once --until C -- TASK   one-shot, no file: run an agent until check C passes
   lute land [branch]           merge lute/<root> into [branch] iff the root exam still passes
   lute watch [file]            read-only event snapshot (--snapshot, --json, --filter LOG)
   lute stop                    stop the active run (and any parallel children) in this repo
-  lute status [file]           may execute checks for loops without open cards, print the loop hierarchy
+  lute status [file]           may execute checks for loops without unanswered cards
   lute inbox                   list what's waiting on you (blocked/gated cards)
   lute answer <loop> "text"    reply to an escalation card in INBOX/
   lute quarantine [list]       inspect quarantined trusted-exam edits
@@ -402,7 +402,7 @@ def cmd_lint(args: list[str]) -> int:
     if not os.path.exists(path):
         raise PreconditionError(f'no {path} here; scaffold one: lute init   (or draft it: lute plan "<goal>")')
     root, schedules, errors = schema.load(path)
-    warnings, counts = [], {"pass": 0, "fail": 0, "error": 0, "not_yet": 0}
+    warnings, counts = [], {"pass": 0, "fail": 0, "error": 0, "not_yet": 0, "skipped": 0}
     if root:
         default_agent = opts.get("agent") or ctx.config.get("agent")
         judge_cmd = ctx.config.get("judge")
@@ -453,7 +453,7 @@ def cmd_lint(args: list[str]) -> int:
                     if loop.confirm < 2:
                         warnings.append(f"{loop.id}: judge: checks should use confirm: 2")
                     if caged:
-                        cls = "pass"
+                        cls = "skipped"
                         warnings.append(f"{loop.id}: judge dry-run skipped under cage; verify the judge exists in {ctx.config.get('cage_image', 'alpine:3')}")
                     elif not resolvable(judge_cmd):
                         errors.append(f"{loop.id}: judge: check but no resolvable judge in {ctx.paths.config}")
@@ -470,7 +470,7 @@ def cmd_lint(args: list[str]) -> int:
                         "not-yet loops need an s/m/h budget because run budgets do not tick while waiting"
                     )
             counts[cls] += 1
-            print(f"{cls:5} {loop.id}: {loop.done_when.command}")
+            print(f"{cls:7} {loop.id}: {loop.done_when.command}")
             for child in loop.children:
                 walk(child, effective)
 
@@ -488,7 +488,12 @@ def cmd_lint(args: list[str]) -> int:
         print(f"warn: {warning}")
     for error in errors:
         print(f"ERROR: {error}")
-    print(f"lint: {sum(counts.values())} check(s), {counts['pass']} pass, {counts['fail']} fail, {counts['error']} error" + (f", {counts['not_yet']} not-yet" if counts["not_yet"] else ""))
+    print(
+        f"lint: {sum(counts.values())} check(s), {counts['pass']} pass, {counts['fail']} fail, {counts['error']} error"
+        + (f", {counts['not_yet']} not-yet" if counts["not_yet"] else "")
+        + (f", {counts['skipped']} skipped" if counts["skipped"] else "")
+    )
+    print("exam note: avoid circular exams that pass by echoing the task string; measure behavior or protected ground truth.")
     if not errors:
         no_agent = any("no agent" in warning for warning in warnings)
         print("no schema errors; set an agent first (see the warning above), then: lute run" if no_agent else "no schema errors; next: lute run")
@@ -646,10 +651,18 @@ def cmd_stop(args: list[str]) -> int:
         info = {}
     pid = info.get("pid")
     entry = entrypoint_path()
-    if not processes.command_contains(pid, entry) or not processes.serves_repo(pid, git.root):
+    serves = processes.serves_repo(pid, git.root) if processes.command_contains(pid, entry) else False
+    if serves is False:
         store.remove_runner_file(lock)
         print(f"no active run here; cleared a stale lock (pid {pid})")
         return 0
+    if serves is None:
+        print(
+            f"could not confirm pid {pid}'s working directory; lock preserved. "
+            f"Stop it manually if it is not this repo's run.",
+            file=sys.stderr,
+        )
+        return 1
     children = 0
     if os.path.isdir(ctx.paths.worktrees):
         for name in sorted(os.listdir(ctx.paths.worktrees)):
@@ -679,7 +692,7 @@ def cmd_land(args: list[str]) -> int:
     root, _ = load_manifest(manifest)
     ctx.manifest_path = manifest
     ctx.root_id = str(root.id)
-    land(runner, root, pos[0] if pos else None, runner.cards, runner.checks, runner.events)
+    land(runner, root, pos[0] if pos else None, runner.cards, runner.checks)
     return 0
 
 

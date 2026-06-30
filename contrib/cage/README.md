@@ -58,7 +58,7 @@ secret can't be read if it was never mounted.
 
 ## The Initial Release Boundary
 
-The cage isolates **filesystem and secrets**. It does **not** bound network
-egress: a caged container can still reach the network, so an agent could
-exfiltrate what it *can* see (your repo, the mounts you granted). Network
-policy is a later notch. Mount only what the agent needs, and only read-only.
+The built-in `cage: docker` template isolates **filesystem and secrets** and
+sets Docker `--network none` by default. Custom templates are your policy
+surface: include the equivalent no-network flag yourself if egress isolation
+matters. Mount only what the agent needs, and only read-only.

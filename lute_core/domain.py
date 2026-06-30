@@ -88,7 +88,7 @@ class LoopSpec:
     children: tuple["LoopSpec", ...] = ()
 
     @classmethod
-    def from_legacy_dict(cls, raw: dict[str, Any]) -> "LoopSpec":
+    def from_normalized(cls, raw: dict[str, Any]) -> "LoopSpec":
         gate = Gate.HUMAN if raw.get("gate") == Gate.HUMAN.value else None
         return cls(
             id=LoopId(raw["id"]),
@@ -102,7 +102,7 @@ class LoopSpec:
             gate=gate,
             protected=tuple(raw.get("protected", ())),
             parallel=bool(raw.get("parallel", False)),
-            children=tuple(cls.from_legacy_dict(c) for c in raw.get("children", ())),
+            children=tuple(cls.from_normalized(c) for c in raw.get("children", ())),
         )
 
     def find(self, loop_id: str) -> "LoopSpec | None":

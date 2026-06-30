@@ -5,8 +5,7 @@ from __future__ import annotations
 from .cards import CardService
 from .checks import CheckRunner
 from .domain import LoopSpec, Verdict
-from .errors import Blocked, PreconditionError
-from .events import EventBus
+from .errors import PreconditionError
 from .git_repo import GitRepo
 from .runner import Runner
 
@@ -17,7 +16,6 @@ def land(
     target: str | None,
     cards: CardService,
     checks: CheckRunner,
-    events: EventBus,
 ) -> None:
     root_id, branch = str(root.id), f"lute/{root.id}"
     git: GitRepo = runner.git
@@ -32,13 +30,12 @@ def land(
         raise PreconditionError("working tree has uncommitted changes; commit or stash before landing")
 
     def block(reason: str) -> None:
-        path = cards.path(root_id)
-        runner.store.safe_write_regular(path, f"BLOCKED: lute land: {reason}\nResolve, then: lute land {target}\n")
-        git.shared_text(runner.ctx.shared_root, "add", path)
-        git.shared_text(runner.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({root_id}): land blocked")
-        events.emit("escalated", root_id, card=f"INBOX/{root_id}.md")
-        runner.agents.fire_halt(root_id, "blocked", path)
-        raise Blocked(reason)
+        cards.raise_block(
+            root_id,
+            f"BLOCKED: lute land: {reason}\nResolve, then: lute land {target}\n",
+            f"lute({root_id}): land blocked",
+            message=reason,
+        )
 
     runner.acquire_lock()
     try:

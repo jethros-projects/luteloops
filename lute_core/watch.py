@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import datetime
 import json
-import os
 
 from .cards import CardService
 from .domain import LoopSpec
@@ -28,25 +26,6 @@ def noise_filter(text: str, maxblock: int = 64) -> str:
             out.append(lines[i])
             i += 1
     return "".join(out)
-
-
-def iso2t(value: str) -> float:
-    try:
-        return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
-            tzinfo=datetime.timezone.utc
-        ).timestamp()
-    except (TypeError, ValueError):
-        return 0
-
-
-def read_tail(path: str, max_bytes: int = 65536) -> str:
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - max_bytes))
-            return f.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
 
 
 def loop_row(depth: int, loop: LoopSpec, state: dict, root: LoopSpec) -> str:

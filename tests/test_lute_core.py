@@ -9,9 +9,10 @@ from pathlib import Path
 from unittest import mock
 
 from lute_core import cards, cli, cli_args, events, formatting, ledger, planner, processes, protection, schema
-from lute_core.cage import CageTemplate, expand_cage_template
+from lute_core.cage import DEFAULT_CAGE_TEMPLATE, CageTemplate, expand_cage_template
+from lute_core.config import freeze_config, load_config
 from lute_core.context import AppContext, Paths
-from lute_core.domain import LoopSpec
+from lute_core.domain import LoopSpec, RunMode
 from lute_core.git_repo import GitRepo
 from lute_core.state_store import StateStore
 
@@ -35,7 +36,7 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(loop["budget"], [("runs", 2), ("secs", 3)])
         self.assertEqual(loop["children"][0]["id"], "child")
         self.assertTrue(any("did you mean tsk -> task" in e for e in errors))
-        spec = LoopSpec.from_legacy_dict(loop)
+        spec = LoopSpec.from_normalized(loop)
         self.assertEqual(str(spec.id), "root")
 
     def test_load_returns_loop_specs_with_typed_children(self):
@@ -120,6 +121,35 @@ class LedgerTests(unittest.TestCase):
         self.assertTrue(ledger.budget_spent("a", [("secs", 1)], entries, auth_for, git_runs=3))
 
 
+class ConfigTests(unittest.TestCase):
+    def test_parallel_child_freezes_parent_state_config_from_trusted_base(self):
+        with tempfile.TemporaryDirectory() as td:
+            parent = os.path.join(td, "parent")
+            child = os.path.join(td, "child")
+            os.makedirs(parent)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=parent, check=True)
+            os.makedirs(os.path.join(parent, ".lute"))
+            Path(parent, ".lute", "config.yaml").write_text('agent: "true"\njudge: "printf FAIL"\n')
+            Path(parent, "lute.yaml").write_text('loop: root\ndone_when: "false"\nbudget: 1 runs\n')
+            subprocess.run(["git", "add", "-f", ".lute/config.yaml"], cwd=parent, check=True)
+            subprocess.run(["git", "add", "lute.yaml"], cwd=parent, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "fixture"],
+                cwd=parent,
+                check=True,
+            )
+            trusted = subprocess.run(["git", "rev-parse", "HEAD"], cwd=parent, check=True, capture_output=True, text=True).stdout.strip()
+            subprocess.run(["git", "worktree", "add", "-q", "-b", "child", child, trusted], cwd=parent, check=True)
+            Path(parent, ".lute", "config.yaml").write_text('agent: "true"\njudge: "printf PASS"\n')
+
+            paths = Paths.for_repo(child, os.path.join(parent, ".lute"))
+            ctx = AppContext(child, paths, load_config(paths.config), os.path.join(child, "lute.yaml"), "root", RunMode.CHILD, True)
+            ctx.trusted_base = trusted
+
+            self.assertEqual(ctx.config["judge"], "printf PASS")
+            self.assertEqual(freeze_config(ctx, GitRepo(child))["judge"], "printf FAIL")
+
+
 class FormattingTests(unittest.TestCase):
     def test_human_duration_and_tail_helpers(self):
         self.assertEqual(formatting.human(0), "0s")
@@ -137,7 +167,36 @@ class ProcessTests(unittest.TestCase):
             self.assertIsNone(processes.proc_cwd(12345))
 
         with mock.patch.object(processes, "proc_cwd", return_value=None):
-            self.assertFalse(processes.serves_repo(12345, "/tmp/repo"))
+            self.assertIsNone(processes.serves_repo(12345, "/tmp/repo"))
+
+    def test_stop_preserves_lock_when_command_matches_but_cwd_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+            Path(td, "seed").write_text("x")
+            subprocess.run(["git", "add", "seed"], cwd=td, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "seed"],
+                cwd=td,
+                check=True,
+            )
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                paths = Paths.for_repo(td)
+                os.makedirs(paths.state)
+                Path(paths.lock).write_text('{"pid": 12345, "start": "x"}')
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.object(processes, "command_contains", return_value=True), \
+                     mock.patch.object(processes, "serves_repo", return_value=None), \
+                     mock.patch.object(processes, "stop_group", return_value=False) as stop_group, \
+                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = cli.cmd_stop([])
+                self.assertEqual(rc, 1)
+                self.assertTrue(Path(paths.lock).exists())
+                self.assertNotIn("stale lock", out.getvalue())
+                stop_group.assert_not_called()
+            finally:
+                os.chdir(old)
 
 
 class CardAndEventTests(unittest.TestCase):
@@ -179,6 +238,9 @@ class CageTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "must contain"):
             CageTemplate("echo nope").expand("/repo", "img", [], "true")
+
+    def test_default_cage_template_restricts_network(self):
+        self.assertIn("--network none", DEFAULT_CAGE_TEMPLATE)
 
 
 class CliAndProtectionTests(unittest.TestCase):
