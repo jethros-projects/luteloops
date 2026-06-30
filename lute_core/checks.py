@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tarfile
+import tempfile
+from io import BytesIO
 
 from .context import AppContext
 from .domain import CheckResult, LoopSpec, Verdict
@@ -46,7 +49,7 @@ def judge_payload(rubric: str, diff: str) -> str:
     )
 
 
-def run_shell_check(command: str, timeout: float, *, lenient: bool = False, classify: bool = False) -> tuple[str, str]:
+def run_shell_check(command: str, timeout: float, *, classify: bool = False, env: dict[str, str] | None = None) -> tuple[str, str]:
     if classify and subprocess.run(["sh", "-n", "-c", command], capture_output=True).returncode:
         return "error", ""
     try:
@@ -56,6 +59,7 @@ def run_shell_check(command: str, timeout: float, *, lenient: bool = False, clas
             stderr=subprocess.STDOUT,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return "fail", f"(check timed out after {timeout_label(timeout)})"
@@ -76,35 +80,42 @@ class CheckRunner:
         self.git = git
         self.cage_wrap = cage_wrap
 
-    def run(self, loop: LoopSpec, *, lenient: bool = False, classify: bool = False) -> CheckResult:
+    def run(self, loop: LoopSpec, *, lenient: bool = False, classify: bool = False, env: dict[str, str] | None = None) -> CheckResult:
         command = loop.done_when.command
         if command.startswith("judge:"):
-            verdict, output = self.judge(loop, command[len("judge:"):].strip(), lenient)
+            verdict, output = self.judge(loop, command[len("judge:"):].strip(), lenient, env=env)
         else:
-            verdict, output = run_shell_check(command, check_timeout(), lenient=lenient, classify=classify)
+            verdict, output = run_shell_check(command, check_timeout(), classify=classify, env=env)
         return CheckResult(Verdict(verdict), output)
 
-    def judge(self, loop: LoopSpec, rubric: str, lenient: bool = False) -> tuple[str, str]:
+    def judge(self, loop: LoopSpec, rubric: str, lenient: bool = False, env: dict[str, str] | None = None) -> tuple[str, str]:
         judge = self.ctx.active_config().get("judge")
         if not judge:
             if lenient:
                 return "fail", "(no judge configured)"
             raise UsageError(f"loop '{loop.id}' uses judge: but {self.ctx.paths.config} has no 'judge' command")
-        diff = self.git.text("diff", self.git.branch_base() + "...HEAD")
+        base = self.ctx.trusted_base or self.git.branch_base()
+        diff = self.git.text("diff", base + "...HEAD")
         payload = judge_payload(rubric, diff)
         timeout = check_timeout()
-        try:
-            result = subprocess.run(
-                ["sh", "-c", self.cage_wrap(judge)],
-                input=payload,
-                encoding="utf-8",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return "fail", f"(judge timed out after {timeout_label(timeout)})"
+        with tempfile.TemporaryDirectory(prefix="lute-judge-") as clean:
+            archive = subprocess.run(["git", "-C", self.git.root, "archive", base], stdout=subprocess.PIPE, check=True)
+            with tarfile.open(fileobj=BytesIO(archive.stdout)) as tar:
+                tar.extractall(clean)
+            try:
+                result = subprocess.run(
+                    ["sh", "-c", self.cage_wrap(judge, clean)],
+                    cwd=clean,
+                    input=payload,
+                    encoding="utf-8",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=timeout,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired:
+                return "fail", f"(judge timed out after {timeout_label(timeout)})"
         out = result.stdout or ""
         first = out.splitlines()[0] if out.splitlines() else ""
-        return ("pass" if first == "PASS" else "fail"), tail(out, 50)
+        return ("pass" if result.returncode == 0 and first == "PASS" else "fail"), tail(out, 50)

@@ -24,8 +24,8 @@ def load_config(path: str) -> dict[str, Any]:
 
 
 def freeze_config(ctx: AppContext, git: GitRepo) -> dict[str, Any]:
-    rel = os.path.relpath(ctx.paths.config)
-    raw = git.show_bytes(f"{git.branch_base()}:{rel}")
+    rel = os.path.relpath(os.path.realpath(ctx.paths.config), os.path.realpath(ctx.shared_root))
+    raw = None if rel.startswith("..") else git.show_bytes(f"{ctx.trusted_base or git.branch_base()}:{rel}")
     if raw is not None:
         try:
             cfg = yaml.safe_load(raw)
