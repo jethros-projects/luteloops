@@ -636,60 +636,6 @@ def cmd_watch(args: list[str]) -> int:
     return 0
 
 
-def agent_pid_path(ctx: AppContext, runner_pid: int | None) -> str | None:
-    if not runner_pid:
-        return None
-    return os.path.join(ctx.paths.state, "agents", f"{runner_pid}.pid")
-
-
-def run_owned(pid: int | None, owner_pid: int | None, entry: str) -> bool:
-    """True only when host-derived facts confirm pid belongs to this run.
-
-    Pid files under .lute/ are writable by the agent (the cage mounts the repo
-    read-write), so their contents are never trusted for a privileged killpg.
-    A sandboxed agent can name a victim pid but cannot make it descend from our
-    runner or run our entrypoint; every legitimate target (the agent, the cage
-    client, parallel child runners and their agents) satisfies one of these.
-    """
-    if not pid:
-        return False
-    return processes.descends_from(pid, owner_pid) or processes.command_contains(pid, entry)
-
-
-def stop_recorded_agent(ctx: AppContext, owner_pid: int | None, entry: str) -> bool:
-    path = agent_pid_path(ctx, owner_pid)
-    if not path:
-        return False
-    try:
-        with open(path, encoding="utf-8") as f:
-            agent_pid = int(f.read().strip())
-    except (OSError, ValueError):
-        return False
-    if not run_owned(agent_pid, owner_pid, entry):
-        return False
-    return processes.stop_group(agent_pid)
-
-
-def stop_parallel_child_runs(ctx: AppContext, entry: str, owner_pid: int | None) -> int:
-    children = 0
-    if not os.path.isdir(ctx.paths.worktrees):
-        return 0
-    for name in sorted(os.listdir(ctx.paths.worktrees)):
-        if not name.endswith(".pid"):
-            continue
-        try:
-            with open(os.path.join(ctx.paths.worktrees, name), encoding="utf-8") as f:
-                pid_text = (f.read().split("\n", 1) + [""])[0]
-            child_pid = int(pid_text)
-        except (OSError, ValueError):
-            continue
-        if run_owned(child_pid, owner_pid, entry):
-            stop_recorded_agent(ctx, child_pid, entry)
-            processes.stop_group(child_pid)
-            children += 1
-    return children
-
-
 def cmd_stop(args: list[str]) -> int:
     pos, _ = parse(args, set())
     need_pos(pos, "usage: lute stop", 0, 0)
@@ -705,28 +651,24 @@ def cmd_stop(args: list[str]) -> int:
         info = {}
     pid = info.get("pid")
     entry = entrypoint_path()
+    # Identify the runner from the lock (host-derived, so we never signal the
+    # wrong repo's run or a reused pid); then let it tear down what it owns.
     serves = processes.serves_repo(pid, git.root) if processes.command_contains(pid, entry) else False
     if serves is False:
         store.remove_runner_file(lock)
         print(f"no active run here; cleared a stale lock (pid {pid})")
         return 0
     if serves is None:
-        children = stop_parallel_child_runs(ctx, entry, pid)
-        tail = f" Stopped {children} identifiable parallel child group(s)." if children else ""
         print(
             f"could not confirm pid {pid}'s working directory; lock preserved. "
-            f"{tail} If it is this repo's run, try: kill {pid}",
+            f"If it is this repo's run, try: kill -INT {pid}",
             file=sys.stderr,
         )
         return 1
-    children = stop_parallel_child_runs(ctx, entry, pid)
-    stop_recorded_agent(ctx, pid, entry)
-    gone = processes.stop_group(pid)
-    tail = f" + {children} parallel child group(s)" if children else ""
-    if gone:
-        print(f"stopped run pid {pid}{tail}; a half-done iteration is dropped on the next run (state is git-derived)")
+    if processes.stop_run(pid):
+        print(f"stopped run pid {pid}; a half-done iteration is dropped on the next run (state is git-derived)")
         return 0
-    print(f"could not confirm pid {pid} stopped{tail}; it may still be running; check with: kill -0 {pid}", file=sys.stderr)
+    print(f"could not confirm pid {pid} stopped; it may still be running; check with: kill -0 {pid}", file=sys.stderr)
     return 1
 
 
