@@ -2007,9 +2007,13 @@ EOF
   grep -qF 'K={keepme}' cagewrap.out || die "26c) unknown braces did not survive: $(cat cagewrap.out)"
 
   # --- d) the built-in docker cage template leaves egress to the operator's template policy.
-  PYTHONPATH="$ROOT" python3 - <<'PY' || die "26d) DEFAULT_CAGE_TEMPLATE blocks network by default"
+  #        Structural (not a substring): reject --net/--network ...none in ANY spelling, so a
+  #        future edit can't silently re-brick caged LLM agents/judge (the round-1 regression).
+  PYTHONPATH="$ROOT" python3 - <<'PY' || die "26d) DEFAULT_CAGE_TEMPLATE disables network by default"
 from lute_core.cage import DEFAULT_CAGE_TEMPLATE
-assert "--network none" not in DEFAULT_CAGE_TEMPLATE
+toks = DEFAULT_CAGE_TEMPLATE.replace("=", " ").split()
+disabled = any(toks[i] in ("--network", "--net") and i + 1 < len(toks) and toks[i + 1] == "none" for i in range(len(toks)))
+assert not disabled, DEFAULT_CAGE_TEMPLATE
 PY
 }
 
@@ -2417,6 +2421,34 @@ PY
     if [ "$i" -gt 30 ]; then
       kill "$cpid" 2>/dev/null || true
       die "32h) timed-out check child process $cpid survived"
+    fi
+    sleep 0.1
+  done
+
+  # --- i) lute stop reaps an in-flight done_when check's process group, not just the agent.
+  #        (The check runs in its own session for timeout reaping, so an interrupted runner
+  #        must tear it down or a paid judge / long check would keep running orphaned.)
+  mkrepo "$WORK/t32i"
+  cat > hang_check.py <<'PY'
+import subprocess, time
+p = subprocess.Popen(["python3", "-c", "import time; time.sleep(120)"])
+open("check-child.pid", "w").write(str(p.pid))
+time.sleep(120)
+PY
+  printf 'loop: hang-check\nagent: "true"\ntask: t\ndone_when: "python3 hang_check.py"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  "$LUTE" run --bg > bg.out 2>&1
+  pid=$(grep -o 'pid [0-9][0-9]*' bg.out | grep -o '[0-9][0-9]*')
+  [ -n "$pid" ] || die "32i) no bg pid: $(cat bg.out)"
+  i=0; while [ ! -f check-child.pid ]; do i=$((i+1)); [ "$i" -gt 100 ] && die "32i) in-flight check never started"; sleep 0.1; done
+  cpid="$(cat check-child.pid)"
+  "$LUTE" stop > stop.out 2>&1 || die "32i) stop failed: $(cat stop.out)"
+  i=0
+  while kill -0 "$cpid" 2>/dev/null; do
+    i=$((i+1))
+    if [ "$i" -gt 50 ]; then
+      kill "$cpid" 2>/dev/null || true
+      die "32i) stop left in-flight check child $cpid alive"
     fi
     sleep 0.1
   done
