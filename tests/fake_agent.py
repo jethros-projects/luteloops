@@ -13,6 +13,7 @@ Steps:
     {"touch":  p}                            create empty file
     {"delete": p}                            unlink a file if present
     {"sleep":  seconds}                      stall (T6 crash window, T10 live window)
+    {"trap_sleep": {"seconds": n, "pid": p}}  ignore SIGINT, write pid to p, then stall
     {"print":  "text"}                       write a line to stdout (T10 streaming)
     {"journal": "line"}                      append a line to this loop's journal
     {"require": p}                           stop this run unless p exists (order proof)
@@ -25,6 +26,7 @@ is saved to prompts/<loop>.run<n>.txt so the harness can inspect it.
 import json
 import os
 import re
+import signal
 import sys
 import time
 
@@ -64,6 +66,13 @@ def run_steps(steps):
                 pass
         elif "sleep" in s:
             time.sleep(s["sleep"])
+        elif "trap_sleep" in s:
+            spec = s["trap_sleep"]
+            signal.signal(signal.SIGINT, lambda _signum, _frame: None)
+            if "pid" in spec:
+                with open(spec["pid"], "w") as f:
+                    f.write(str(os.getpid()))
+            time.sleep(spec["seconds"])
         elif "print" in s:
             print(s["print"], flush=True)
         elif "journal" in s:

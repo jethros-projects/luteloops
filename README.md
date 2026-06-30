@@ -234,7 +234,7 @@ runs only the compiled proposal after you review and rename it.
 | verb | what it does |
 |---|---|
 | `lute init` | scaffold a `lute.yaml` and `.lute/` (or `lute init --skill` to write a local copy of the packaged luteloops skill) |
-| `lute lint [file]` | validate the schema, resolve agents, and **execute every `done_when` once** except caged judge checks, which are reported as skipped; classify each pass / fail / error / not-yet / skipped; an error fails the lint, because an exam must be administrable before work begins |
+| `lute lint [file]` | validate the schema, resolve uncaged agents (caged agent commands are not resolved on the host), and **execute every `done_when` once** except caged judge checks, which are reported as skipped; classify each pass / fail / error / not-yet / skipped; an error fails the lint, because an exam must be administrable before work begins |
 | `lute run [root-id]` | run loops depth-first until everything is green (`--agent CMD`, `--file F`, `--plain`, `--bg` to detach, `--dry-run` to preview, `--skip-if-running` for cron overlap); child loops run through their parent |
 | `lute once --until C -- "task"` | one-shot, no file: run an agent until check `C` passes (`--agent`, `--id`, `--budget`) |
 | `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable) |
@@ -344,7 +344,7 @@ loops:
 Then:
 
 ```sh
-lute lint     # exams are dry-run before work starts; caged judge checks are reported as skipped
+lute lint     # caged judge checks are reported as skipped; caged agents/judges are image-local
 lute run      # grinds on branch lute/react-19, one commit per iteration
 lute status   # ✔ done / ↻ in progress / ◌ untouched
 ```
@@ -567,8 +567,8 @@ covered by `protected:`.
 
 By default an agent shares your filesystem and can read `~/.ssh`. Set
 `cage: docker` in `.lute/config.yaml` and every command lute runs *on behalf of
-a model*: per-loop agents and `judge:` commands run inside a container that
-sees only your repo (read-write at `/work`) and whatever you name explicitly.
+a model* runs inside a container: agents see only your repo (read-write at
+`/work`) and whatever you name explicitly; judges see only an empty working directory and the stdin diff.
 `done_when` checks stay on the host (they're yours and need your toolchain):
 
 ```yaml
@@ -581,9 +581,11 @@ cage_mounts:                # extra host paths, mounted read-only, by name
 
 For `judge:` checks, Lute sends the rubric as trusted instructions and wraps
 the candidate diff inside `BEGIN UNTRUSTED DIFF` / `END UNTRUSTED DIFF`
-markers. The judge is told to treat diff content as evidence only, never as
-instructions, and still closes only when the first output line is exactly
-`PASS`.
+markers. The judge runs in an empty working directory and grades the stdin diff
+only; if a grader must read or execute working files, make that a normal
+`done_when` shell check instead. The judge is told to treat diff content as
+evidence only, never as instructions, and still closes only when stdout's first
+line is exactly `PASS` and the judge command exits 0.
 
 The prompt still flows on stdin; output still lands in the same per-run log.
 **Secrets policy is absence:** nothing of the host is visible except the repo
@@ -591,9 +593,10 @@ and what `cage_mounts` names, so `~/.ssh` and your environment simply aren't
 there. The image is yours to build: it must contain your agent CLI, and auth
 enters read-only through `cage_mounts`, by name, never implicitly.
 `contrib/cage/Dockerfile` is a worked Codex sample (`node:20-slim` +
-`@openai/codex` + `git`). The built-in `cage: docker` template also sets
-`--network none` by default. Custom cage templates are operator-owned: include
-the equivalent egress restriction yourself if network isolation matters.
+`@openai/codex` + `git`). The built-in `cage: docker` template can still reach the network so model CLIs can call their APIs. Custom cage templates are
+operator-owned: if egress isolation matters, supply your own template with the
+network policy you want, for example a Docker template that includes
+`--network none`.
 
 The same isolation protects Lute's own answer-auth key. Answered cards can
 refresh a loop's budget once, and gated cards seal human approval. If agents are
