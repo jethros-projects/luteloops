@@ -22,6 +22,18 @@ def pid_alive(pid: int | None) -> bool:
     return True
 
 
+def group_alive(pgid: int | None) -> bool:
+    try:
+        os.killpg(pgid, 0)  # type: ignore[arg-type]
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def command_contains(pid: int | None, needle: str) -> bool:
     if not pid or not pid_alive(pid):
         return False
@@ -55,11 +67,11 @@ def proc_cwd(pid: int) -> str | None:
     return None
 
 
-def serves_repo(pid: int, repo_root: str) -> bool:
-    """True only when pid's cwd is positively inside repo_root."""
+def serves_repo(pid: int, repo_root: str) -> bool | None:
+    """True/False when pid's cwd is known; None when this host cannot determine it."""
     cwd = proc_cwd(pid)
     if cwd is None:
-        return False
+        return None
     cwd, root = os.path.realpath(cwd), os.path.realpath(repo_root)
     try:
         return cwd == root or os.path.commonpath([cwd, root]) == root
@@ -80,15 +92,15 @@ def stop_group(pid: int) -> bool:
 
     sig(signal.SIGINT)
     for _ in range(20):
-        if not pid_alive(pid):
+        if not pid_alive(pid) and not group_alive(pid):
             return True
         time.sleep(0.1)
     sig(signal.SIGKILL)
     for _ in range(10):
-        if not pid_alive(pid):
+        if not pid_alive(pid) and not group_alive(pid):
             return True
         time.sleep(0.1)
-    return not pid_alive(pid)
+    return not pid_alive(pid) and not group_alive(pid)
 
 
 def spawn_detached(
