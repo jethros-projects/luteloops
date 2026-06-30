@@ -57,12 +57,6 @@ def protected_files(globs: list[str]) -> list[str]:
     return files
 
 
-def tampered_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    changed = set(before) ^ set(after)
-    changed |= {p for p in before.keys() & after.keys() if before[p] != after[p]}
-    return sorted(changed)
-
-
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -369,6 +363,3 @@ class Protection:
             os.remove(path)
         except OSError:
             pass
-
-    def tampered(self, baseline: ProtectionBaseline) -> list[str]:
-        return self.changed_paths(baseline)

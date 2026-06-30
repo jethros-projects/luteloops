@@ -52,7 +52,6 @@ class AppContext:
     plain: bool = False
     run_pre_untracked: set[str] = field(default_factory=set)
     frozen_config: dict[str, Any] | None = None
-    cage_template: str | None = None
     nagged: dict[str, bool] = field(default_factory=dict)
     trusted_base: str = ""
     quarantined_paths: set[str] = field(default_factory=set)
