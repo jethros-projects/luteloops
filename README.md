@@ -502,6 +502,9 @@ can read the answer-auth key, so it can forge the approval token. `lute lint`
 reports this as an error, and `lute run` refuses a gated manifest before work
 starts. Use the cage even if the host has no other secrets; for gates, it is the
 trust anchor, not just a convenience.
+This is a different trust base from exam-pass integrity: host-side checks and
+protected exams still work for uncaged agents, but human approval and answered
+card budget refresh assume a real isolating cage.
 
 Approve with `lute answer release-ready approve`; after trimming whitespace,
 the answer text must be exactly `approve` to seal. On the next run the exam is
@@ -590,6 +593,8 @@ The same isolation protects Lute's own answer-auth key. Answered cards can
 refresh a loop's budget once, and gated cards seal human approval. If agents are
 uncaged, those mechanisms are useful operator workflow, not adversarial security
 boundaries; `lint` warns for budget-refreshable loops and errors for human gates.
+A no-op template such as `sh -lc {cmd}` is still uncaged in practice: it runs as
+you and can read the answer-auth key.
 
 ## Schedules (cron, not a daemon)
 

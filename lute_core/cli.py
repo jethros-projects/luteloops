@@ -14,6 +14,7 @@ from importlib import resources
 
 from . import cli_args, processes, schema
 from .cards import summarize_card
+from .cage import looks_like_container_runtime
 from .checks import CheckRunner
 from .detached import spawn_run, terminal_ok
 from .config import load_config
@@ -405,7 +406,8 @@ def cmd_lint(args: list[str]) -> int:
     if root:
         default_agent = opts.get("agent") or ctx.config.get("agent")
         judge_cmd = ctx.config.get("judge")
-        caged = bool(ctx.config.get("cage"))
+        cage = ctx.config.get("cage")
+        caged = bool(cage)
 
         budget_authority_loops: list[str] = []
 
@@ -419,6 +421,13 @@ def cmd_lint(args: list[str]) -> int:
                 errors.append(
                     f"{loop.id}: gate: human requires cage in {ctx.paths.config}; "
                     "uncaged agents can read Lute's answer-auth key and forge approval"
+                )
+            elif loop.gate == Gate.HUMAN and not looks_like_container_runtime(cage):
+                warnings.append(
+                    f"{loop.id}: cage template does not look like a container runtime "
+                    "(heuristic: expected cage: docker or a docker/podman run template), "
+                    "so the gate: human guarantee that the agent cannot read Lute's "
+                    "answer-auth key is not actually enforced"
                 )
             if not caged and loop.task is not None and loop.budget.limits:
                 budget_authority_loops.append(str(loop.id))
