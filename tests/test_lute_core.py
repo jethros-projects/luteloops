@@ -202,26 +202,53 @@ class ProcessTests(unittest.TestCase):
             finally:
                 os.chdir(old)
 
-    def test_stop_parallel_child_runs_uses_recorded_marker(self):
+    def test_stop_parallel_child_runs_ignores_agent_authored_pid_files(self):
+        # The .pid files live under .lute/wt, which the cage mounts read-write,
+        # so an agent can plant one. The kill must gate on host-derived facts,
+        # never on the file's own contents (pid or marker).
         with tempfile.TemporaryDirectory() as td:
             paths = Paths.for_repo(td)
             os.makedirs(paths.worktrees)
-            Path(paths.worktrees, "child.pid").write_text("456\nold-entrypoint")
-            seen: list[tuple[int, str]] = []
+            Path(paths.worktrees, "evil.pid").write_text("456\nattacker-marker")
+            ctx = AppContext(td, paths, {}, "", "root", RunMode.FILE)
 
-            def command_contains(pid, needle):
-                seen.append((pid, needle))
-                return pid == 456 and needle == "old-entrypoint"
+            def only_marker(pid, needle):
+                return pid == 456 and needle == "attacker-marker"
 
-            with mock.patch.object(processes, "command_contains", side_effect=command_contains), \
+            with mock.patch.object(processes, "command_contains", side_effect=only_marker), \
+                 mock.patch.object(processes, "descends_from", return_value=False), \
                  mock.patch.object(cli, "stop_recorded_agent") as stop_agent, \
                  mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
-                self.assertEqual(cli.stop_parallel_child_runs(AppContext(td, paths, {}, "", "root", RunMode.FILE), "current-entry"), 1)
+                self.assertEqual(cli.stop_parallel_child_runs(ctx, "lute-entry", 12345), 0)
+            stop_group.assert_not_called()
+            stop_agent.assert_not_called()
 
-            self.assertIn((456, "current-entry"), seen)
-            self.assertIn((456, "old-entrypoint"), seen)
-            stop_agent.assert_called_once()
+            # A genuinely owned child (descends from our runner) is stopped.
+            with mock.patch.object(processes, "command_contains", return_value=False), \
+                 mock.patch.object(processes, "descends_from", return_value=True), \
+                 mock.patch.object(cli, "stop_recorded_agent") as stop_agent, \
+                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
+                self.assertEqual(cli.stop_parallel_child_runs(ctx, "lute-entry", 12345), 1)
             stop_group.assert_called_once_with(456)
+
+    def test_stop_recorded_agent_only_kills_host_owned_pid(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = Paths.for_repo(td)
+            os.makedirs(os.path.join(paths.state, "agents"))
+            ctx = AppContext(td, paths, {}, "", "root", RunMode.FILE)
+            Path(cli.agent_pid_path(ctx, 12345)).write_text("999")  # agent-planted victim
+
+            with mock.patch.object(processes, "descends_from", return_value=False), \
+                 mock.patch.object(processes, "command_contains", return_value=False), \
+                 mock.patch.object(processes, "serves_repo", return_value=False), \
+                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
+                self.assertFalse(cli.stop_recorded_agent(ctx, 12345, "lute-entry"))
+            stop_group.assert_not_called()
+
+            with mock.patch.object(processes, "descends_from", return_value=True), \
+                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
+                self.assertTrue(cli.stop_recorded_agent(ctx, 12345, "lute-entry"))
+            stop_group.assert_called_once_with(999)
 
 
 class CardAndEventTests(unittest.TestCase):
@@ -303,7 +330,30 @@ class CageTests(unittest.TestCase):
             CageTemplate("echo nope").expand("/repo", "img", [], "true")
 
     def test_default_cage_template_leaves_egress_to_operator_policy(self):
-        self.assertNotIn("--network none", DEFAULT_CAGE_TEMPLATE)
+        # Egress is ON by default: caged LLM agents and judges need network to
+        # reach their model API. Sealing is an opt-in operator template. The
+        # guard is structural so a future edit cannot silently re-brick the cage
+        # with a different spelling (the round-1 regression).
+        def disables_network(template):
+            toks = template.replace("=", " ").split()
+            return any(
+                toks[i] in ("--network", "--net") and i + 1 < len(toks) and toks[i + 1] == "none"
+                for i in range(len(toks))
+            )
+
+        self.assertFalse(disables_network(DEFAULT_CAGE_TEMPLATE))
+        # the structural guard catches every spelling the old substring missed
+        self.assertTrue(disables_network("docker run --net none img sh"))
+        self.assertTrue(disables_network("docker run --net=none img sh"))
+        self.assertTrue(disables_network("docker run --network=none img sh"))
+
+    def test_capture_ignore_excludes_agent_pid_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = StateStore(Paths.for_repo(td))
+            store.ensure_layout()
+            store.ensure_capture_ignore()
+            ignore = Path(td, ".lute", ".gitignore").read_text().splitlines()
+            self.assertIn("agents/", ignore)
 
 
 class CliAndProtectionTests(unittest.TestCase):
