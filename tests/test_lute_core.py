@@ -170,85 +170,59 @@ class ProcessTests(unittest.TestCase):
         with mock.patch.object(processes, "proc_cwd", return_value=None):
             self.assertIsNone(processes.serves_repo(12345, "/tmp/repo"))
 
-    def test_stop_preserves_lock_when_command_matches_but_cwd_unknown(self):
+    def _seeded_repo_with_lock(self, td, pid):
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+        Path(td, "seed").write_text("x")
+        subprocess.run(["git", "add", "seed"], cwd=td, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "seed"],
+            cwd=td,
+            check=True,
+        )
+        paths = Paths.for_repo(td)
+        os.makedirs(paths.state)
+        Path(paths.lock).write_text('{"pid": %d, "start": "x"}' % pid)
+        return paths
+
+    def test_stop_asks_the_runner_to_tear_itself_down(self):
+        # Cooperative stop: confirm the runner from the lock, then ask IT to stop
+        # (it reaps the children it owns). No pid files, no ancestry, no forensics.
         with tempfile.TemporaryDirectory() as td:
-            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
-            Path(td, "seed").write_text("x")
-            subprocess.run(["git", "add", "seed"], cwd=td, check=True)
-            subprocess.run(
-                ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "seed"],
-                cwd=td,
-                check=True,
-            )
+            self._seeded_repo_with_lock(td, 4242)
             old = os.getcwd()
             try:
                 os.chdir(td)
-                paths = Paths.for_repo(td)
-                os.makedirs(paths.state)
-                os.makedirs(paths.worktrees)
-                Path(paths.lock).write_text('{"pid": 12345, "start": "x"}')
-                Path(paths.worktrees, "child.pid").write_text("456\nmarker")
-                out, err = io.StringIO(), io.StringIO()
+                out = io.StringIO()
                 with mock.patch.object(processes, "command_contains", return_value=True), \
-                     mock.patch.object(processes, "serves_repo", return_value=None), \
-                     mock.patch.object(processes, "stop_group", return_value=False) as stop_group, \
-                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                     mock.patch.object(processes, "serves_repo", return_value=True), \
+                     mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
+                     contextlib.redirect_stdout(out):
                     rc = cli.cmd_stop([])
-                self.assertEqual(rc, 1)
-                self.assertTrue(Path(paths.lock).exists())
-                self.assertNotIn("stale lock", out.getvalue())
-                self.assertIn("try: kill", err.getvalue())
-                stop_group.assert_called_once_with(456)
+                self.assertEqual(rc, 0)
+                stop_run.assert_called_once_with(4242)
+                self.assertIn("stopped run pid 4242", out.getvalue())
             finally:
                 os.chdir(old)
 
-    def test_stop_parallel_child_runs_ignores_agent_authored_pid_files(self):
-        # The .pid files live under .lute/wt, which the cage mounts read-write,
-        # so an agent can plant one. The kill must gate on host-derived facts,
-        # never on the file's own contents (pid or marker).
+    def test_stop_preserves_lock_when_runner_cwd_unknown(self):
         with tempfile.TemporaryDirectory() as td:
-            paths = Paths.for_repo(td)
-            os.makedirs(paths.worktrees)
-            Path(paths.worktrees, "evil.pid").write_text("456\nattacker-marker")
-            ctx = AppContext(td, paths, {}, "", "root", RunMode.FILE)
-
-            def only_marker(pid, needle):
-                return pid == 456 and needle == "attacker-marker"
-
-            with mock.patch.object(processes, "command_contains", side_effect=only_marker), \
-                 mock.patch.object(processes, "descends_from", return_value=False), \
-                 mock.patch.object(cli, "stop_recorded_agent") as stop_agent, \
-                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
-                self.assertEqual(cli.stop_parallel_child_runs(ctx, "lute-entry", 12345), 0)
-            stop_group.assert_not_called()
-            stop_agent.assert_not_called()
-
-            # A genuinely owned child (descends from our runner) is stopped.
-            with mock.patch.object(processes, "command_contains", return_value=False), \
-                 mock.patch.object(processes, "descends_from", return_value=True), \
-                 mock.patch.object(cli, "stop_recorded_agent") as stop_agent, \
-                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
-                self.assertEqual(cli.stop_parallel_child_runs(ctx, "lute-entry", 12345), 1)
-            stop_group.assert_called_once_with(456)
-
-    def test_stop_recorded_agent_only_kills_host_owned_pid(self):
-        with tempfile.TemporaryDirectory() as td:
-            paths = Paths.for_repo(td)
-            os.makedirs(os.path.join(paths.state, "agents"))
-            ctx = AppContext(td, paths, {}, "", "root", RunMode.FILE)
-            Path(cli.agent_pid_path(ctx, 12345)).write_text("999")  # agent-planted victim
-
-            with mock.patch.object(processes, "descends_from", return_value=False), \
-                 mock.patch.object(processes, "command_contains", return_value=False), \
-                 mock.patch.object(processes, "serves_repo", return_value=False), \
-                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
-                self.assertFalse(cli.stop_recorded_agent(ctx, 12345, "lute-entry"))
-            stop_group.assert_not_called()
-
-            with mock.patch.object(processes, "descends_from", return_value=True), \
-                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
-                self.assertTrue(cli.stop_recorded_agent(ctx, 12345, "lute-entry"))
-            stop_group.assert_called_once_with(999)
+            self._seeded_repo_with_lock(td, 12345)
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.object(processes, "command_contains", return_value=True), \
+                     mock.patch.object(processes, "serves_repo", return_value=None), \
+                     mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
+                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = cli.cmd_stop([])
+                self.assertEqual(rc, 1)
+                self.assertTrue(Path(Paths.for_repo(td).lock).exists())
+                self.assertNotIn("stale lock", out.getvalue())
+                self.assertIn("kill -INT", err.getvalue())
+                stop_run.assert_not_called()  # never signal a run we cannot confirm is ours
+            finally:
+                os.chdir(old)
 
 
 class CardAndEventTests(unittest.TestCase):
@@ -346,14 +320,6 @@ class CageTests(unittest.TestCase):
         self.assertTrue(disables_network("docker run --net none img sh"))
         self.assertTrue(disables_network("docker run --net=none img sh"))
         self.assertTrue(disables_network("docker run --network=none img sh"))
-
-    def test_capture_ignore_excludes_agent_pid_files(self):
-        with tempfile.TemporaryDirectory() as td:
-            store = StateStore(Paths.for_repo(td))
-            store.ensure_layout()
-            store.ensure_capture_ignore()
-            ignore = Path(td, ".lute", ".gitignore").read_text().splitlines()
-            self.assertIn("agents/", ignore)
 
 
 class CliAndProtectionTests(unittest.TestCase):

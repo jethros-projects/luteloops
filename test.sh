@@ -2452,6 +2452,47 @@ PY
     fi
     sleep 0.1
   done
+
+  # --- j) stopping a PARALLEL run cascades: the parent reaps its child runners,
+  #        and each child runner reaps its own agent (no orphans, no pid files).
+  mkrepo "$WORK/t32j"
+  root="$PWD"
+  cat > lute.yaml <<EOF
+loop: par-stop
+agent: "$FAKE"
+done_when: "false"
+parallel: true
+budget: 50 runs
+loops:
+  - loop: child-a
+    task: t
+    done_when: "false"
+    budget: 50 runs
+  - loop: child-b
+    task: t
+    done_when: "false"
+    budget: 50 runs
+EOF
+  cat > playbook.json <<EOF
+{ "child-a": { "1": [ {"trap_sleep": {"seconds": 120, "pid": "$root/a.pid"}} ] },
+  "child-b": { "1": [ {"trap_sleep": {"seconds": 120, "pid": "$root/b.pid"}} ] } }
+EOF
+  seal
+  "$LUTE" run --bg > bg.out 2>&1
+  ppid_=$(grep -o 'pid [0-9][0-9]*' bg.out | grep -o '[0-9][0-9]*')
+  [ -n "$ppid_" ] || die "32j) no bg pid: $(cat bg.out)"
+  i=0; while [ ! -f "$root/a.pid" ] || [ ! -f "$root/b.pid" ]; do i=$((i+1)); [ "$i" -gt 150 ] && die "32j) parallel child agents never started"; sleep 0.1; done
+  apid="$(cat "$root/a.pid")"; bpid="$(cat "$root/b.pid")"
+  "$LUTE" stop > stop.out 2>&1 || die "32j) stop failed: $(cat stop.out)"
+  for who in "parent:$ppid_" "child-a-agent:$apid" "child-b-agent:$bpid"; do
+    name="${who%%:*}"; p="${who##*:}"
+    i=0
+    while kill -0 "$p" 2>/dev/null; do
+      i=$((i+1))
+      if [ "$i" -gt 80 ]; then kill "$p" 2>/dev/null || true; die "32j) stop left $name ($p) alive"; fi
+      sleep 0.1
+    done
+  done
 }
 
 # ---------------------------------------------------------------- T33
