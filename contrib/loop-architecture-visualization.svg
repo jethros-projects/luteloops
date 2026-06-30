@@ -1,0 +1,457 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+  <title>Lute nested loop architecture visualization</title>
+  <desc>A block diagram for validating a complex nested system of Lute loops.</desc>
+  <defs>
+    <style>
+      :root {
+        --bg: #f7f6f2;
+        --panel: #ffffff;
+        --ink: #171a1f;
+        --muted: #606975;
+        --line: #d8dce3;
+        --soft-line: #e9ebef;
+        --blue: #2563eb;
+        --blue-soft: #eaf1ff;
+        --green: #17803d;
+        --green-soft: #eaf7ee;
+        --amber: #b7791f;
+        --amber-soft: #fff5da;
+        --red: #c81e1e;
+        --red-soft: #fff0f0;
+        --purple: #6d3fd1;
+        --purple-soft: #f3efff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      .bg {
+        fill: var(--bg);
+      }
+
+      .surface {
+        fill: var(--panel);
+        stroke: var(--line);
+        stroke-width: 1.2;
+      }
+
+      .root {
+        fill: #fffdf8;
+        stroke: #b9c0ca;
+        stroke-width: 1.5;
+      }
+
+      .block {
+        fill: var(--panel);
+        stroke: var(--line);
+        stroke-width: 1.2;
+      }
+
+      .ok {
+        fill: var(--green-soft);
+        stroke: #79bc8e;
+      }
+
+      .warn {
+        fill: var(--amber-soft);
+        stroke: #e5b75a;
+      }
+
+      .issue {
+        fill: var(--red-soft);
+        stroke: #e06666;
+      }
+
+      .gate {
+        fill: var(--purple-soft);
+        stroke: #a78bfa;
+      }
+
+      .selected {
+        fill: var(--blue-soft);
+        stroke: var(--blue);
+        stroke-width: 2.4;
+      }
+
+      .parallel {
+        fill: #f7fbff;
+        stroke: #8eb7f2;
+      }
+
+      .watcher {
+        fill: #fffaf0;
+        stroke: #d69e2e;
+        stroke-dasharray: 7 5;
+      }
+
+      .lane {
+        fill: rgba(37, 99, 235, 0.035);
+        stroke: #cbd5e1;
+        stroke-width: 1;
+      }
+
+      text {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      }
+
+      .header {
+        font-size: 28px;
+        font-weight: 700;
+        fill: var(--ink);
+      }
+
+      .subheader {
+        font-size: 14px;
+        font-weight: 500;
+        fill: var(--muted);
+      }
+
+      .label {
+        font-size: 17px;
+        font-weight: 650;
+        fill: var(--ink);
+      }
+
+      .small-label {
+        font-size: 13px;
+        font-weight: 650;
+        fill: var(--ink);
+      }
+
+      .tiny-label {
+        font-size: 11px;
+        font-weight: 600;
+        fill: var(--ink);
+      }
+
+      .meta {
+        font-size: 12px;
+        font-weight: 500;
+        fill: var(--muted);
+      }
+
+      .mono {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        font-weight: 500;
+        fill: #2f3742;
+      }
+
+      .chip-text {
+        font-size: 12px;
+        font-weight: 650;
+        fill: currentColor;
+      }
+
+      .chip {
+        stroke-width: 1;
+      }
+
+      .guide {
+        stroke: #b9c0ca;
+        stroke-width: 1.2;
+        stroke-dasharray: 4 5;
+      }
+
+      .arrow {
+        stroke: #8a94a3;
+        stroke-width: 1.4;
+        marker-end: url(#arrow-tip);
+      }
+    </style>
+    <marker id="arrow-tip" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a94a3"/>
+    </marker>
+    <pattern id="protected-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="8" stroke="#cbd5e1" stroke-width="2"/>
+    </pattern>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1800" height="1100"/>
+
+  <g id="top-bar">
+    <rect class="surface" x="20" y="18" width="1760" height="58" rx="8"/>
+    <text class="header" x="44" y="55">Lute nested loop architecture</text>
+    <text class="subheader" x="440" y="55">containment blocks, sequence left to right, parallel lanes inside blocks</text>
+
+    <g transform="translate(970 31)">
+      <rect class="chip" x="0" y="0" width="92" height="30" rx="6" fill="#ffffff" stroke="#d8dce3"/>
+      <text class="chip-text" x="14" y="20" style="color:#171a1f">428 loops</text>
+    </g>
+    <g transform="translate(1074 31)">
+      <rect class="chip" x="0" y="0" width="100" height="30" rx="6" fill="#ffffff" stroke="#d8dce3"/>
+      <text class="chip-text" x="14" y="20" style="color:#171a1f">depth 9</text>
+    </g>
+    <g transform="translate(1186 31)">
+      <rect class="chip" x="0" y="0" width="106" height="30" rx="6" fill="#fff5da" stroke="#e5b75a"/>
+      <text class="chip-text" x="14" y="20" style="color:#b7791f">7 warnings</text>
+    </g>
+    <g transform="translate(1304 31)">
+      <rect class="chip" x="0" y="0" width="88" height="30" rx="6" fill="#fff0f0" stroke="#e06666"/>
+      <text class="chip-text" x="14" y="20" style="color:#c81e1e">3 issues</text>
+    </g>
+    <g transform="translate(1404 31)">
+      <rect class="chip" x="0" y="0" width="126" height="30" rx="6" fill="#f3efff" stroke="#a78bfa"/>
+      <text class="chip-text" x="14" y="20" style="color:#6d3fd1">3 human gates</text>
+    </g>
+    <g transform="translate(1542 31)">
+      <rect class="chip" x="0" y="0" width="114" height="30" rx="6" fill="#eaf7ee" stroke="#79bc8e"/>
+      <text class="chip-text" x="14" y="20" style="color:#17803d">lint passes</text>
+    </g>
+  </g>
+
+  <g id="legend" transform="translate(32 92)">
+    <text class="subheader" x="0" y="18">Legend</text>
+    <rect x="62" y="2" width="18" height="18" rx="4" class="block"/>
+    <text class="meta" x="88" y="16">normal loop</text>
+    <rect x="180" y="2" width="18" height="18" rx="4" class="parallel"/>
+    <text class="meta" x="206" y="16">parallel parent</text>
+    <rect x="324" y="2" width="18" height="18" rx="4" class="gate"/>
+    <text class="meta" x="350" y="16">human gate</text>
+    <rect x="450" y="2" width="18" height="18" rx="4" class="watcher"/>
+    <text class="meta" x="476" y="16">watcher check</text>
+    <rect x="594" y="2" width="18" height="18" rx="4" class="issue"/>
+    <text class="meta" x="620" y="16">architecture issue</text>
+  </g>
+
+  <g id="main-map">
+    <rect class="root" x="30" y="125" width="1320" height="855" rx="10"/>
+    <text class="label" x="56" y="162">release</text>
+    <text class="meta" x="130" y="162">root sequence · budget 8h · parent closes only when children close and integration exam passes</text>
+    <line class="guide" x1="68" y1="188" x2="1312" y2="188"/>
+    <text class="meta" x="1110" y="163">sequence order</text>
+    <line class="arrow" x1="1204" y1="159" x2="1304" y2="159"/>
+
+    <g id="preflight">
+      <rect class="block" x="54" y="210" width="202" height="718" rx="8"/>
+      <text class="label" x="76" y="243">01 preflight</text>
+      <text class="meta" x="76" y="265">seq · budget 45m · 4 loops</text>
+      <rect class="ok" x="76" y="292" width="158" height="62" rx="7"/>
+      <text class="small-label" x="92" y="318">repo shape</text>
+      <text class="meta" x="92" y="339">paths exist</text>
+      <rect class="ok" x="76" y="372" width="158" height="62" rx="7"/>
+      <text class="small-label" x="92" y="398">skill loaded</text>
+      <text class="meta" x="92" y="419">canonical rules</text>
+      <rect class="ok" x="76" y="452" width="158" height="62" rx="7"/>
+      <text class="small-label" x="92" y="478">yaml parses</text>
+      <text class="meta" x="92" y="499">source lines kept</text>
+      <rect class="watcher" x="76" y="532" width="158" height="96" rx="7"/>
+      <text class="small-label" x="92" y="558">lint dry run</text>
+      <text class="meta" x="92" y="579">exit 75 until ready</text>
+      <text class="meta" x="92" y="602">no budget spend</text>
+      <rect class="block" x="76" y="648" width="158" height="232" rx="7"/>
+      <text class="small-label" x="92" y="674">architecture IR</text>
+      <text class="meta" x="92" y="696">normalize tree</text>
+      <line class="guide" x1="100" y1="718" x2="100" y2="844"/>
+      <rect class="ok" x="116" y="724" width="96" height="44" rx="6"/>
+      <text class="tiny-label" x="130" y="751">ids</text>
+      <rect class="ok" x="116" y="780" width="96" height="44" rx="6"/>
+      <text class="tiny-label" x="130" y="807">depth</text>
+      <rect class="ok" x="116" y="836" width="96" height="28" rx="6"/>
+      <text class="tiny-label" x="130" y="855">order</text>
+    </g>
+
+    <g id="implementation">
+      <rect class="parallel" x="276" y="210" width="456" height="718" rx="8"/>
+      <text class="label" x="298" y="243">02 implementation</text>
+      <text class="meta" x="298" y="265">parallel · budget 3h · each child in own worktree</text>
+
+      <rect class="lane" x="298" y="292" width="124" height="594" rx="7"/>
+      <text class="small-label" x="314" y="318">api lane</text>
+      <text class="meta" x="314" y="339">12 loops</text>
+      <rect class="ok" x="314" y="360" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="326" y="390">contracts</text>
+      <rect class="selected" x="314" y="430" width="92" height="218" rx="6"/>
+      <text class="tiny-label" x="326" y="459">services</text>
+      <text class="meta" x="326" y="479">parallel</text>
+      <line class="guide" x1="331" y1="493" x2="331" y2="620"/>
+      <rect class="issue" x="344" y="502" width="46" height="34" rx="5"/>
+      <text class="tiny-label" x="353" y="524">bill</text>
+      <rect class="ok" x="344" y="548" width="46" height="34" rx="5"/>
+      <text class="tiny-label" x="350" y="570">search</text>
+      <rect class="ok" x="344" y="594" width="46" height="34" rx="5"/>
+      <text class="tiny-label" x="354" y="616">jobs</text>
+      <rect class="warn" x="314" y="664" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="326" y="694">storage</text>
+      <rect class="ok" x="314" y="736" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="326" y="766">migrations</text>
+      <rect class="block" x="314" y="808" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="326" y="838">adapter</text>
+
+      <rect class="lane" x="438" y="292" width="124" height="594" rx="7"/>
+      <text class="small-label" x="454" y="318">ui lane</text>
+      <text class="meta" x="454" y="339">18 loops</text>
+      <rect class="ok" x="454" y="360" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="466" y="390">tree table</text>
+      <rect class="warn" x="454" y="430" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="466" y="460">block map</text>
+      <rect class="block" x="454" y="500" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="466" y="530">inspector</text>
+      <rect class="ok" x="454" y="570" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="466" y="600">minimap</text>
+      <rect class="block" x="454" y="640" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="466" y="670">search</text>
+      <rect class="gate" x="454" y="710" width="92" height="72" rx="6"/>
+      <text class="tiny-label" x="466" y="740">design gate</text>
+      <text class="meta" x="466" y="760">human</text>
+      <rect class="block" x="454" y="804" width="92" height="58" rx="6"/>
+      <text class="tiny-label" x="466" y="838">a11y pass</text>
+
+      <rect class="lane" x="578" y="292" width="124" height="594" rx="7"/>
+      <text class="small-label" x="594" y="318">runner lane</text>
+      <text class="meta" x="594" y="339">14 loops</text>
+      <rect class="ok" x="594" y="360" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="606" y="390">scheduler</text>
+      <rect class="ok" x="594" y="430" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="606" y="460">worktrees</text>
+      <rect class="warn" x="594" y="500" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="606" y="530">merge queue</text>
+      <rect class="watcher" x="594" y="570" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="606" y="600">retry loop</text>
+      <rect class="ok" x="594" y="640" width="92" height="54" rx="6"/>
+      <text class="tiny-label" x="606" y="670">quarantine</text>
+      <rect class="block" x="594" y="710" width="92" height="72" rx="6"/>
+      <text class="tiny-label" x="606" y="740">exit codes</text>
+      <text class="meta" x="606" y="760">0/3/4/75</text>
+      <rect class="block" x="594" y="804" width="92" height="58" rx="6"/>
+      <text class="tiny-label" x="606" y="838">telemetry</text>
+    </g>
+
+    <g id="quality">
+      <rect class="block" x="752" y="210" width="282" height="718" rx="8"/>
+      <text class="label" x="774" y="243">03 quality checks</text>
+      <text class="meta" x="774" y="265">seq · budget 2h · repo outcome exams</text>
+      <rect class="ok" x="774" y="292" width="238" height="62" rx="7"/>
+      <text class="small-label" x="790" y="318">unit suite</text>
+      <text class="mono" x="790" y="340">pytest tests/unit</text>
+      <rect class="warn" x="774" y="372" width="238" height="96" rx="7"/>
+      <text class="small-label" x="790" y="398">integration suite</text>
+      <text class="mono" x="790" y="420">pytest tests/integration</text>
+      <text class="meta" x="790" y="445">warn: missing protected glob</text>
+      <rect class="block" x="774" y="488" width="238" height="118" rx="7"/>
+      <text class="small-label" x="790" y="514">architecture validators</text>
+      <line class="guide" x1="798" y1="536" x2="986" y2="536"/>
+      <rect class="ok" x="790" y="552" width="88" height="34" rx="5"/>
+      <text class="tiny-label" x="804" y="574">budgets</text>
+      <rect class="issue" x="890" y="552" width="100" height="34" rx="5"/>
+      <text class="tiny-label" x="904" y="574">overlap</text>
+      <rect class="watcher" x="774" y="626" width="238" height="78" rx="7"/>
+      <text class="small-label" x="790" y="652">slow flake watcher</text>
+      <text class="meta" x="790" y="674">exit 75 until stable</text>
+      <rect class="gate" x="774" y="724" width="238" height="78" rx="7"/>
+      <text class="small-label" x="790" y="750">release readiness gate</text>
+      <text class="meta" x="790" y="772">human approval after checks</text>
+      <rect class="block" x="774" y="822" width="238" height="64" rx="7"/>
+      <text class="small-label" x="790" y="848">final integration exam</text>
+      <text class="mono" x="790" y="870">./test.sh</text>
+    </g>
+
+    <g id="docs">
+      <rect class="block" x="1054" y="210" width="142" height="718" rx="8"/>
+      <text class="label" x="1074" y="243">04 docs</text>
+      <text class="meta" x="1074" y="265">seq · 1h</text>
+      <rect class="ok" x="1074" y="292" width="100" height="70" rx="7"/>
+      <text class="tiny-label" x="1088" y="322">README</text>
+      <text class="meta" x="1088" y="344">updated</text>
+      <rect class="ok" x="1074" y="382" width="100" height="70" rx="7"/>
+      <text class="tiny-label" x="1088" y="412">examples</text>
+      <text class="meta" x="1088" y="434">valid yaml</text>
+      <rect class="warn" x="1074" y="472" width="100" height="70" rx="7"/>
+      <text class="tiny-label" x="1088" y="502">operator</text>
+      <text class="meta" x="1088" y="524">needs gate</text>
+      <rect class="block" x="1074" y="562" width="100" height="70" rx="7"/>
+      <text class="tiny-label" x="1088" y="592">man page</text>
+      <text class="meta" x="1088" y="614">draft</text>
+      <rect class="gate" x="1074" y="652" width="100" height="86" rx="7"/>
+      <text class="tiny-label" x="1088" y="682">docs gate</text>
+      <text class="meta" x="1088" y="704">human</text>
+    </g>
+
+    <g id="ship">
+      <rect class="gate" x="1216" y="210" width="112" height="718" rx="8"/>
+      <text class="label" x="1236" y="243">05 ship</text>
+      <text class="meta" x="1236" y="265">gate</text>
+      <rect class="block" x="1236" y="292" width="70" height="84" rx="7"/>
+      <text class="tiny-label" x="1248" y="322">tag</text>
+      <text class="meta" x="1248" y="344">created</text>
+      <rect class="block" x="1236" y="400" width="70" height="84" rx="7"/>
+      <text class="tiny-label" x="1248" y="430">build</text>
+      <text class="meta" x="1248" y="452">sdist</text>
+      <rect class="gate" x="1236" y="508" width="70" height="106" rx="7"/>
+      <text class="tiny-label" x="1248" y="538">approve</text>
+      <text class="meta" x="1248" y="560">seal</text>
+      <rect class="block" x="1236" y="638" width="70" height="84" rx="7"/>
+      <text class="tiny-label" x="1248" y="668">publish</text>
+      <text class="meta" x="1248" y="690">pypi</text>
+      <rect class="ok" x="1236" y="746" width="70" height="84" rx="7"/>
+      <text class="tiny-label" x="1248" y="776">smoke</text>
+      <text class="meta" x="1248" y="798">pass</text>
+    </g>
+  </g>
+
+  <g id="inspector">
+    <rect class="surface" x="1380" y="125" width="390" height="855" rx="10"/>
+    <text class="label" x="1410" y="166">Selected loop</text>
+    <text class="header" x="1410" y="214" style="font-size:26px">api / services / billing</text>
+    <line x1="1410" y1="238" x2="1740" y2="238" stroke="#d8dce3" stroke-width="1"/>
+
+    <text class="meta" x="1410" y="278">Parent</text>
+    <text class="small-label" x="1535" y="278">api / services</text>
+    <text class="meta" x="1410" y="318">Children</text>
+    <text class="small-label" x="1535" y="318">billing api, db, jobs</text>
+    <text class="meta" x="1410" y="358">Execution</text>
+    <text class="small-label" x="1535" y="358">parallel lane</text>
+    <text class="meta" x="1410" y="398">Budget</text>
+    <text class="small-label" x="1535" y="398">30m</text>
+    <text class="meta" x="1410" y="438">Source</text>
+    <text class="mono" x="1535" y="438">lute.yaml:142</text>
+
+    <text class="meta" x="1410" y="492">done_when</text>
+    <rect class="block" x="1410" y="510" width="330" height="62" rx="7"/>
+    <text class="mono" x="1428" y="538">pytest tests/contracts/billing</text>
+    <text class="meta" x="1428" y="558">measures external contract behavior</text>
+
+    <text class="meta" x="1410" y="620">protected</text>
+    <rect class="block" x="1410" y="638" width="330" height="62" rx="7"/>
+    <rect x="1424" y="652" width="84" height="34" rx="5" fill="url(#protected-hatch)" stroke="#cbd5e1"/>
+    <text class="mono" x="1522" y="674">tests/contracts/**</text>
+
+    <text class="label" x="1410" y="750">Architecture issue</text>
+    <rect class="issue" x="1410" y="770" width="330" height="112" rx="8"/>
+    <text class="small-label" x="1428" y="800">protected path overlaps sibling</text>
+    <text class="meta" x="1428" y="828">billing and search both protect</text>
+    <text class="mono" x="1428" y="852">tests/contracts/**</text>
+    <text class="meta" x="1428" y="872">Parallel siblings can interfere.</text>
+
+    <line x1="1410" y1="910" x2="1740" y2="910" stroke="#d8dce3" stroke-width="1"/>
+    <text class="meta" x="1410" y="940">Fix direction</text>
+    <text class="small-label" x="1535" y="940">split protected globs by service</text>
+  </g>
+
+  <g id="minimap">
+    <rect class="surface" x="30" y="1004" width="1740" height="70" rx="8"/>
+    <text class="meta" x="54" y="1030">whole architecture minimap</text>
+    <rect x="270" y="1020" width="1440" height="34" rx="4" fill="#f8fafc" stroke="#d8dce3"/>
+    <rect x="284" y="1028" width="100" height="8" rx="2" fill="#9aa4b2"/>
+    <rect x="284" y="1040" width="54" height="8" rx="2" fill="#c2c8d0"/>
+    <rect x="410" y="1028" width="328" height="8" rx="2" fill="#9aa4b2"/>
+    <rect x="422" y="1040" width="86" height="8" rx="2" fill="#c2c8d0"/>
+    <rect x="518" y="1040" width="86" height="8" rx="2" fill="#e06666"/>
+    <rect x="614" y="1040" width="86" height="8" rx="2" fill="#c2c8d0"/>
+    <rect x="764" y="1028" width="220" height="8" rx="2" fill="#9aa4b2"/>
+    <rect x="788" y="1040" width="86" height="8" rx="2" fill="#e5b75a"/>
+    <rect x="884" y="1040" width="86" height="8" rx="2" fill="#c2c8d0"/>
+    <rect x="1010" y="1028" width="130" height="8" rx="2" fill="#9aa4b2"/>
+    <rect x="1024" y="1040" width="40" height="8" rx="2" fill="#c2c8d0"/>
+    <rect x="1074" y="1040" width="40" height="8" rx="2" fill="#e5b75a"/>
+    <rect x="1166" y="1028" width="80" height="8" rx="2" fill="#a78bfa"/>
+    <rect x="1280" y="1028" width="230" height="8" rx="2" fill="#9aa4b2"/>
+    <rect x="1316" y="1040" width="64" height="8" rx="2" fill="#c2c8d0"/>
+    <rect x="1390" y="1040" width="64" height="8" rx="2" fill="#e06666"/>
+    <rect x="1544" y="1028" width="120" height="8" rx="2" fill="#9aa4b2"/>
+    <rect x="1558" y="1040" width="42" height="8" rx="2" fill="#c2c8d0"/>
+    <rect x="1610" y="1040" width="42" height="8" rx="2" fill="#a78bfa"/>
+    <rect x="410" y="1018" width="328" height="38" rx="5" fill="none" stroke="#2563eb" stroke-width="2"/>
+  </g>
+</svg>
