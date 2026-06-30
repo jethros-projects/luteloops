@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tarfile
 import tempfile
-from io import BytesIO
 
 from .context import AppContext
 from .domain import CheckResult, LoopSpec, Verdict
 from .errors import UsageError
 from .formatting import tail
 from .git_repo import GitRepo
+from . import processes
 
 CHECK_TIMEOUT = 600
 JUDGE_INSTRUCTION = """You are Lute's judge. Grade whether the untrusted diff satisfies the trusted rubric.
@@ -49,29 +48,53 @@ def judge_payload(rubric: str, diff: str) -> str:
     )
 
 
+def run_command(
+    command: str,
+    timeout: float,
+    *,
+    cwd: str | None = None,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+    combine_stderr: bool = True,
+) -> tuple[int | None, str, str, bool]:
+    proc = subprocess.Popen(
+        ["sh", "-c", command],
+        cwd=cwd,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if combine_stderr else subprocess.PIPE,
+        encoding="utf-8",
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(input_text, timeout=timeout)
+        return proc.returncode, stdout or "", "" if combine_stderr else (stderr or ""), False
+    except subprocess.TimeoutExpired:
+        processes.stop_group(proc.pid)
+        try:
+            stdout, stderr = proc.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+        return None, stdout or "", "" if combine_stderr else (stderr or ""), True
+
+
 def run_shell_check(command: str, timeout: float, *, classify: bool = False, env: dict[str, str] | None = None) -> tuple[str, str]:
     if classify and subprocess.run(["sh", "-n", "-c", command], capture_output=True).returncode:
         return "error", ""
-    try:
-        result = subprocess.run(
-            ["sh", "-c", command],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
+    returncode, stdout, _, timed_out = run_command(command, timeout, env=env)
+    if timed_out:
         return "fail", f"(check timed out after {timeout_label(timeout)})"
-    if result.returncode == 0:
+    if returncode == 0:
         verdict = "pass"
-    elif result.returncode == 75:
+    elif returncode == 75:
         verdict = "not_yet"
-    elif classify and result.returncode in (126, 127):
+    elif classify and returncode in (126, 127):
         verdict = "error"
     else:
         verdict = "fail"
-    return verdict, tail(result.stdout or "", 50)
+    return verdict, tail(stdout, 50)
 
 
 class CheckRunner:
@@ -98,24 +121,18 @@ class CheckRunner:
         diff = self.git.text("diff", base + "...HEAD")
         payload = judge_payload(rubric, diff)
         timeout = check_timeout()
-        with tempfile.TemporaryDirectory(prefix="lute-judge-") as clean:
-            archive = subprocess.run(["git", "-C", self.git.root, "archive", base], stdout=subprocess.PIPE, check=True)
-            with tarfile.open(fileobj=BytesIO(archive.stdout)) as tar:
-                tar.extractall(clean)
-            try:
-                result = subprocess.run(
-                    ["sh", "-c", self.cage_wrap(judge, clean)],
-                    cwd=clean,
-                    input=payload,
-                    encoding="utf-8",
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=timeout,
-                    env=env,
-                )
-            except subprocess.TimeoutExpired:
+        with tempfile.TemporaryDirectory(prefix="lute-judge-") as empty:
+            returncode, stdout, stderr, timed_out = run_command(
+                self.cage_wrap(judge, empty),
+                timeout,
+                cwd=empty,
+                input_text=payload,
+                env=env,
+                combine_stderr=False,
+            )
+            if timed_out:
                 return "fail", f"(judge timed out after {timeout_label(timeout)})"
-        out = result.stdout or ""
-        first = out.splitlines()[0] if out.splitlines() else ""
-        return ("pass" if result.returncode == 0 and first == "PASS" else "fail"), tail(out, 50)
+        lines = stdout.splitlines()
+        first = lines[0] if lines else ""
+        out = stdout + (stderr if stderr else "")
+        return ("pass" if returncode == 0 and first == "PASS" else "fail"), tail(out, 50)
