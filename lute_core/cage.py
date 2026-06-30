@@ -10,7 +10,7 @@ from typing import Any
 
 DEFAULT_CAGE_TEMPLATE = (
     "docker run --rm -i -v {repo}:/work -w /work --pids-limit 256 "
-    "--memory 2g --network none {mounts} {image} sh -lc {cmd}"
+    "--memory 2g {mounts} {image} sh -lc {cmd}"
 )
 
 def looks_like_container_runtime(cage: Any) -> bool:
