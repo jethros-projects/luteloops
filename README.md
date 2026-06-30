@@ -308,7 +308,7 @@ truth the worker does not author.
 
 **State ownership:** normal repo content outside `.lute/` and `INBOX/` is agent-owned work
 product. Runner-owned state is `.lute/config.yaml`, `.lute/ledger.jsonl`, `.lute/events.jsonl`,
-`.lute/lock`, `.lute/journal/*`, `.lute/logs/*`, `.lute/wt/`, and `INBOX/*`. Before writing events,
+`.lute/lock`, `.lute/journal/*`, `.lute/logs/*`, `.lute/wt/`, `.lute/agents/*`, and `INBOX/*`. Before writing events,
 ledger entries, logs, cards, or lock files, lute repairs those paths as real files/directories and
 never follows agent-created symlinks. Journals are prompt memory: agents append to them by contract,
 but budget and closure decisions never trust journal contents. If an agent deletes `.lute/logs`,
