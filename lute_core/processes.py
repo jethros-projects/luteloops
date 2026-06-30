@@ -47,6 +47,34 @@ def command_line(pid: int | None) -> str:
     return subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
 
 
+def parent_pid(pid: int | None) -> int | None:
+    if not pid:
+        return None
+    out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    try:
+        return int(out)
+    except ValueError:
+        return None
+
+
+def descends_from(pid: int | None, ancestor: int | None, max_depth: int = 50) -> bool:
+    """True when pid is, or is a descendant of, ancestor.
+
+    Process ancestry is host-derived: a sandboxed agent can name a pid in a file
+    but cannot make a victim process descend from our runner.
+    """
+    if not pid or not ancestor:
+        return False
+    current: int | None = pid
+    for _ in range(max_depth):
+        if current is None or current <= 1:
+            return False
+        if current == ancestor:
+            return True
+        current = parent_pid(current)
+    return False
+
+
 def proc_cwd(pid: int) -> str | None:
     """Return pid's cwd, or None when this host cannot determine it."""
     link = f"/proc/{pid}/cwd"

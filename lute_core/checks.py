@@ -78,6 +78,11 @@ def run_command(
         except subprocess.TimeoutExpired:
             stdout, stderr = "", ""
         return None, stdout or "", "" if combine_stderr else (stderr or ""), True
+    except BaseException:
+        # An interrupt (e.g. `lute stop` signalling the runner) must not orphan
+        # an in-flight check or LLM judge that lives in its own session.
+        processes.stop_group(proc.pid)
+        raise
 
 
 def run_shell_check(command: str, timeout: float, *, classify: bool = False, env: dict[str, str] | None = None) -> tuple[str, str]:
