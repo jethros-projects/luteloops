@@ -960,6 +960,19 @@ EOF
   git add -A && git commit -qm fixture3
   rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "f) caged gate: human failed lint: $(cat lint.out)"
+  grep -q "heuristic" lint.out || die "f) non-container cage warning does not say heuristic: $(cat lint.out)"
+  grep -q "does not look like a container runtime" lint.out \
+    || die "f) non-container cage warning does not name the isolation gap: $(cat lint.out)"
+  grep -q "answer-auth key" lint.out \
+    || die "f) non-container cage warning does not name the key risk: $(cat lint.out)"
+  rm -f lint.out
+  printf 'cage: docker\n' > .lute/config.yaml
+  git add -A && git commit -qm fixture4
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "f) docker gate: human failed lint: $(cat lint.out)"
+  if grep -q "does not look like a container runtime" lint.out; then
+    die "f) docker cage got the non-container warning: $(cat lint.out)"
+  fi
 }
 
 # ---------------------------------------------------------------- T17
