@@ -47,34 +47,6 @@ def command_line(pid: int | None) -> str:
     return subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
 
 
-def parent_pid(pid: int | None) -> int | None:
-    if not pid:
-        return None
-    out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
-    try:
-        return int(out)
-    except ValueError:
-        return None
-
-
-def descends_from(pid: int | None, ancestor: int | None, max_depth: int = 50) -> bool:
-    """True when pid is, or is a descendant of, ancestor.
-
-    Process ancestry is host-derived: a sandboxed agent can name a pid in a file
-    but cannot make a victim process descend from our runner.
-    """
-    if not pid or not ancestor:
-        return False
-    current: int | None = pid
-    for _ in range(max_depth):
-        if current is None or current <= 1:
-            return False
-        if current == ancestor:
-            return True
-        current = parent_pid(current)
-    return False
-
-
 def proc_cwd(pid: int) -> str | None:
     """Return pid's cwd, or None when this host cannot determine it."""
     link = f"/proc/{pid}/cwd"
@@ -129,6 +101,25 @@ def stop_group(pid: int) -> bool:
             return True
         time.sleep(0.1)
     return not pid_alive(pid) and not group_alive(pid)
+
+
+def stop_run(pid: int, grace: int = 120) -> bool:
+    """Ask a runner to stop, then confirm it is gone.
+
+    A SIGINT lets the runner reap the children it owns (its agent, an in-flight
+    check or judge, or its parallel child runners) through its own teardown, then
+    exit and release the lock — no pid files, no ancestry walks. A wedged runner
+    that never returns is forced through its group as a last resort.
+    """
+    try:
+        os.kill(pid, signal.SIGINT)
+    except OSError:
+        pass
+    for _ in range(grace):
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return stop_group(pid)
 
 
 def spawn_detached(

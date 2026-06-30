@@ -152,7 +152,7 @@ class StateStore:
 
     def ensure_capture_ignore(self) -> None:
         ignore = os.path.join(self.paths.state, ".gitignore")
-        need = ("logs/", "events.jsonl", "wt/", "quarantine/", "agents/", "lock*")
+        need = ("logs/", "events.jsonl", "wt/", "quarantine/", "lock*")
         have = []
         if self.is_regular_file(ignore):
             with open(ignore, encoding="utf-8") as f:
