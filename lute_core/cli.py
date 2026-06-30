@@ -636,6 +636,44 @@ def cmd_watch(args: list[str]) -> int:
     return 0
 
 
+def agent_pid_path(ctx: AppContext, runner_pid: int | None) -> str | None:
+    if not runner_pid:
+        return None
+    return os.path.join(ctx.paths.state, "agents", f"{runner_pid}.pid")
+
+
+def stop_recorded_agent(ctx: AppContext, runner_pid: int | None) -> bool:
+    path = agent_pid_path(ctx, runner_pid)
+    if not path:
+        return False
+    try:
+        agent_pid = int(open(path, encoding="utf-8").read().strip())
+    except (OSError, ValueError):
+        return False
+    return processes.stop_group(agent_pid)
+
+
+def stop_parallel_child_runs(ctx: AppContext, entry: str) -> int:
+    children = 0
+    if not os.path.isdir(ctx.paths.worktrees):
+        return 0
+    for name in sorted(os.listdir(ctx.paths.worktrees)):
+        if not name.endswith(".pid"):
+            continue
+        try:
+            with open(os.path.join(ctx.paths.worktrees, name), encoding="utf-8") as f:
+                pid_text, marker = (f.read().split("\n", 1) + [""])[:2]
+            child_pid = int(pid_text)
+        except (OSError, ValueError):
+            continue
+        marker = marker.strip()
+        if processes.command_contains(child_pid, entry) or (marker and processes.command_contains(child_pid, marker)):
+            stop_recorded_agent(ctx, child_pid)
+            processes.stop_group(child_pid)
+            children += 1
+    return children
+
+
 def cmd_stop(args: list[str]) -> int:
     pos, _ = parse(args, set())
     need_pos(pos, "usage: lute stop", 0, 0)
@@ -645,8 +683,8 @@ def cmd_stop(args: list[str]) -> int:
         print("no active run in this repo")
         return 0
     try:
-        import json
-        info = json.loads(open(lock).read())
+        with open(lock, encoding="utf-8") as f:
+            info = json.loads(f.read())
     except (OSError, ValueError):
         info = {}
     pid = info.get("pid")
@@ -657,24 +695,16 @@ def cmd_stop(args: list[str]) -> int:
         print(f"no active run here; cleared a stale lock (pid {pid})")
         return 0
     if serves is None:
+        children = stop_parallel_child_runs(ctx, entry)
+        tail = f" Stopped {children} identifiable parallel child group(s)." if children else ""
         print(
             f"could not confirm pid {pid}'s working directory; lock preserved. "
-            f"Stop it manually if it is not this repo's run.",
+            f"{tail} If it is this repo's run, try: kill {pid}",
             file=sys.stderr,
         )
         return 1
-    children = 0
-    if os.path.isdir(ctx.paths.worktrees):
-        for name in sorted(os.listdir(ctx.paths.worktrees)):
-            if not name.endswith(".pid"):
-                continue
-            try:
-                child_pid = int(open(os.path.join(ctx.paths.worktrees, name)).read().split("\n", 1)[0])
-            except (OSError, ValueError):
-                continue
-            if processes.command_contains(child_pid, entry):
-                processes.stop_group(child_pid)
-                children += 1
+    children = stop_parallel_child_runs(ctx, entry)
+    stop_recorded_agent(ctx, pid)
     gone = processes.stop_group(pid)
     tail = f" + {children} parallel child group(s)" if children else ""
     if gone:
