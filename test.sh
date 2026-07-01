@@ -3127,6 +3127,23 @@ SH
   if ! kill -0 "$opid" 2>/dev/null; then kill "$opid" 2>/dev/null; die "39e) stop in /repo killed /repo-other (path-prefix bug)"; fi
   grep -q 'stale lock' stop.out || die "39e) /repo's stop didn't treat the prefix-sibling lock as stale: $(cat stop.out)"
   kill "$opid" 2>/dev/null; ( cd "$WORK/repo-other" && "$LUTE" stop >/dev/null 2>&1 ) || true
+
+  # --- f) stop's kill needs BOTH identity factors: a stale lock naming a live pid whose
+  #        cwd is inside this repo but whose argv is not a lute run (your shell, an editor,
+  #        a reused pid) is preserved with a manual hint - never signalled, never "stale".
+  mkrepo "$WORK/t39f"
+  printf 'loop: f\nagent: "true"\ntask: t\ndone_when: "true"\nbudget: 1 runs\n' > lute.yaml; seal
+  mkdir -p .lute
+  sleep 300 & spid=$!            # an innocent process whose cwd is inside the repo
+  printf '{"pid": %s, "start": "x"}' "$spid" > .lute/lock
+  rc=0; "$LUTE" stop > stop.out 2>&1 || rc=$?
+  alive=ok; kill -0 "$spid" 2>/dev/null || alive=dead
+  lock=present; [ -f .lute/lock ] || lock=gone
+  kill "$spid" 2>/dev/null || true
+  [ "$alive" = ok ] || die "39f) stop killed an innocent repo-cwd process (kill identity needs the argv factor)"
+  [ "$rc" -eq 1 ] || die "39f) want exit 1 (cannot confirm), got $rc: $(cat stop.out)"
+  [ "$lock" = present ] || die "39f) lock cleared for a pid stop could not identify"
+  grep -q 'could not confirm' stop.out || die "39f) stop does not explain the unconfirmed identity: $(cat stop.out)"
 }
 
 # ---------------------------------------------------------------- T40
@@ -4057,7 +4074,7 @@ desc() {
     t36) echo "frontier polish lint won't wave run on without an agent; once offers merge not land; one schedule contract (lint+cron); watch --json carries a per-node ASCII word" ;;
     t37) echo "red-team        worker can't rewrite its grader; gated parallel child pauses; tampered exam stays caught on re-run; ledger-delete can't bypass budget; agent artifact committed not clutter; ascii stdout doesn't crash; cron won't clobber an unreadable crontab" ;;
     t38) echo "red-team 2      cross-run: committed grader/manifest/exam tamper + budget forgery can't buy a pass on a later run; ascii never crashes; cron refuses a malformed block; stop won't kill another repo; land untracked-overwrite cards + exit 3" ;;
-    t39) echo "red-team 3      forged ledger 'answer' events can't refresh budget (runner-authenticated); a genuine answer still does; stop respects path identity (prefix sibling not killed)" ;;
+    t39) echo "red-team 3      forged ledger 'answer' events can't refresh budget (runner-authenticated); a genuine answer still does; stop needs two-factor identity (prefix sibling + repo-cwd stranger not killed)" ;;
     t40) echo "parallel-answer a genuine answer to a blocked parallel child refreshes its budget; the answer-auth key is shared across main + worktree (keyed on shared-state root)" ;;
     t41) echo "unit-primitives extracted pure modules: schema, ledger, cards, events, cage, args, globs" ;;
     t42) echo "ledger-integrity time budgets survive ledger truncation, rewrites, forged runs, answer replay; run numbers stay unique" ;;

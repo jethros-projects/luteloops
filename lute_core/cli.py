@@ -714,6 +714,14 @@ def cmd_judge(args: list[str]) -> int:
     return judge.grade(rubric, ctx, git, runner.agents.cage_wrap)
 
 
+# How a lock-holding lute invocation looks on ps: the entrypoint carries "lute"
+# (the script, or `-m lute_core.cli`) followed by a verb that takes the run lock.
+# The lock file itself is untrusted (a crash leaves it stale, a pid gets reused,
+# anything in the repo can write it); this live argv shape is the identity factor
+# a forged or recycled pid cannot fake.
+RUN_MARKER = r"lute\S* (run|once|plan|land)\b"
+
+
 def cmd_stop(args: list[str]) -> int:
     pos, _ = parse(args, set())
     need_pos(pos, "usage: lute stop", 0, 0)
@@ -728,17 +736,18 @@ def cmd_stop(args: list[str]) -> int:
     except (OSError, ValueError):
         info = {}
     pid = info.get("pid")
-    # Identify the runner from the lock (host-derived, so we never signal the
-    # wrong repo's run or a reused pid); then let it tear down what it owns.
-    serves = processes.serves_repo(pid, git.root) if processes.pid_alive(pid) else False
-    if serves is False:
+    # Identify the runner from live host facts, never from the lock alone (the
+    # same two-factor identity reap_orphans uses); then let it tear down what it
+    # owns. Anything short of proof is reported, not signalled.
+    owned = processes.owns(pid, git.root, RUN_MARKER) if isinstance(pid, int) and pid > 0 else False
+    if owned is False:
         store.remove_runner_file(lock)
         print(f"no active run here; cleared a stale lock (pid {pid})")
         return 0
-    if serves is None:
+    if owned is None:
         print(
-            f"could not confirm pid {pid}'s working directory; lock preserved. "
-            f"If it is this repo's run, try: kill -INT {pid}",
+            f"could not confirm pid {pid} is this repo's runner; lock preserved. "
+            f"If it is, try: kill -INT {pid}",
             file=sys.stderr,
         )
         return 1
