@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 from dataclasses import dataclass, asdict
 from typing import Any
 
@@ -165,6 +166,27 @@ def _symlink_ancestor(path: str) -> str | None:
     return None
 
 
+def _submodule_head(path: str) -> str | None:
+    """The commit a checked-out submodule points at, or None if this directory
+    is not a git checkout. Hooks and fsmonitor are disabled: we only read, and
+    the directory's config is agent-controlled."""
+    try:
+        result = subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-C", path, "rev-parse", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _dir_is_empty(path: str) -> bool:
+    try:
+        return not os.listdir(path)
+    except OSError:
+        return False  # unreadable: treat as non-empty, i.e. a change (fail closed)
+
+
 def _current_record(path: str) -> FileRecord | None:
     if ancestor := _symlink_ancestor(path):
         raw = f"{ancestor}->{os.readlink(ancestor)}".encode()
@@ -188,6 +210,13 @@ def _current_record(path: str) -> FileRecord | None:
             return FileRecord(path, "unreadable", mode, _sha(raw), "worktree", raw)
         return FileRecord(path, "file", mode, _sha(raw), "worktree", raw)
     if stat.S_ISDIR(st.st_mode):
+        # A submodule mounts as a directory. If it is a checkout, its identity is
+        # the commit it points at; an empty directory is an uninitialized one.
+        # Anything else is a plain directory — content, not a boundary.
+        if os.path.lexists(os.path.join(path, ".git")) and (head := _submodule_head(path)):
+            return FileRecord(path, "gitlink", 0o160000, head, "worktree")
+        if _dir_is_empty(path):
+            return FileRecord(path, "empty-dir", mode, _sha(b"<empty-directory>"), "worktree")
         raw = b"<directory>"
         return FileRecord(path, "dir", mode, _sha(raw), "worktree", raw)
     raw = f"<mode:{st.st_mode}>".encode()
@@ -198,13 +227,13 @@ def _same(a: FileRecord | None, b: FileRecord | None) -> bool:
     if a is None or b is None:
         return a is None and b is None
     if a.kind == "gitlink":
-        if b.kind == "gitlink":
-            return a.digest == b.digest  # ref-to-ref: a moved submodule pointer is a trusted change
-        # The worktree probe of a submodule sees a plain directory (initialized
-        # or not), which satisfies the gitlink. Content beneath it belongs to
-        # that other repository — outside protection's boundary by design; the
-        # pointer itself is policed ref-to-ref at merge and land.
-        return b.kind == "dir"
+        # A submodule is a boundary, not content. It is unchanged only when the
+        # worktree still presents that submodule at the recorded commit (or an
+        # uninitialized, empty mount). A plain directory of agent-authored files
+        # in its place is a change — restored, so content smuggled behind the
+        # boundary cannot buy a pass. (A real checkout at the recorded commit
+        # with a dirty tree is the residual noted in THREAT_MODEL.md.)
+        return (b.kind == "gitlink" and a.digest == b.digest) or b.kind == "empty-dir"
     return (a.kind, a.mode, a.digest) == (b.kind, b.mode, b.digest)
 
 
@@ -289,10 +318,12 @@ class Protection:
             if not path:
                 continue
             kind, full_mode, object_id = _lstree_entry(meta_b)
-            # Committed symlinks the glob can reach below are watched too, so the
-            # walk (which watches them live) and the baseline stay symmetric.
+            # A symlink or submodule the glob can reach BELOW is watched even
+            # when its own name doesn't match: the walk cannot see past it (a
+            # symlink hides its target, a submodule its repository), so recording
+            # it keeps walk and baseline symmetric and marks it a boundary.
             watched = any(m.match(path) for m in matchers) or (
-                kind == "symlink" and any(reaches_below(g, path) for g in globs)
+                kind in ("symlink", "gitlink") and any(reaches_below(g, path) for g in globs)
             )
             if watched:
                 out.append((path, self._git_record(path, kind, full_mode, object_id)))
