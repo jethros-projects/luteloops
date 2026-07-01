@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 from importlib import resources
 
@@ -27,7 +28,7 @@ from .git_repo import GitRepo
 from .landing import land
 from .planner import build_plan_task, repo_briefing
 from .protection import glob_re, protected_files
-from .runner import Runner, entrypoint_path, resolved_loop, self_cmd
+from .runner import Runner, resolved_loop, self_cmd
 from .state_store import StateStore
 from .status import render_inbox, render_status
 from .watch import render_filtered, render_json, render_snapshot
@@ -41,7 +42,7 @@ USAGE = """\
 lute: a while-loop for agents
 usage:
   lute init [--skill]          scaffold a lute.yaml and .lute/ (--skill: write a local copy of the skill)
-  lute lint [file]             validate schema + dry-run checks (caged judges skipped)
+  lute lint [--no-exec] [file] validate schema + dry-run checks (caged judges skipped)
   lute run [root-id]           run loops until green (--file F, --agent CMD, --plain, --bg, --dry-run)
   lute once --until C -- TASK   one-shot, no file: run an agent until check C passes
   lute land [branch]           merge lute/<root> into [branch] iff the root exam still passes
@@ -125,13 +126,30 @@ def packaged_skill_body() -> str:
 
 def load_skill_body() -> tuple[str, str]:
     for path in SKILLS:
-        if os.path.isfile(path):
+        if os.path.lexists(path):
+            if os.path.islink(path) or not os.path.isfile(path):
+                raise PreconditionError(f"{path} must be a regular file")
             with open(path, encoding="utf-8") as f:
                 return path, f.read()
     return "packaged luteloops skill", packaged_skill_body()
 
 
-def make_runtime(root_id: str = "", manifest_path: str = "", mode: RunMode = RunMode.FILE, plain: bool = False):
+def trusted_file(path: str, label: str, shared_root: str) -> str:
+    full = os.path.abspath(path)
+    if os.path.islink(full):
+        raise PreconditionError(f"{label} must be a regular file, not a symlink: {path}")
+    if os.path.exists(full):
+        real, root = os.path.realpath(full), os.path.realpath(shared_root)
+        try:
+            inside = os.path.commonpath([root, real]) == root
+        except ValueError:
+            inside = False
+        if not inside:
+            raise PreconditionError(f"{label} must live inside this repository: {path}")
+    return full
+
+
+def make_context(root_id: str = "", manifest_path: str = "", mode: RunMode = RunMode.FILE, plain: bool = False):
     git = GitRepo.discover()
     os.chdir(git.root)
     paths = Paths.for_repo(git.root, os.environ.get("LUTE_STATE_DIR"))
@@ -146,10 +164,15 @@ def make_runtime(root_id: str = "", manifest_path: str = "", mode: RunMode = Run
         mode=mode,
         plain=plain,
     )
+    return ctx, git, store
+
+
+def make_runtime(root_id: str = "", manifest_path: str = "", mode: RunMode = RunMode.FILE, plain: bool = False):
+    ctx, git, store = make_context(root_id, manifest_path, mode, plain)
     return ctx, git, store, Runner(ctx, git, store)
 
 
-def load_manifest(path: str, *, run_message: bool = False):
+def load_manifest(path: str, *, run_message: bool = False, shared_root: str | None = None):
     if not os.path.exists(path):
         if run_message:
             raise PreconditionError(
@@ -157,6 +180,7 @@ def load_manifest(path: str, *, run_message: bool = False):
                 'one-shot (no file): lute once --until "<check>" --agent <cli> -- "<task>"'
             )
         raise PreconditionError(f'no {path} here; scaffold one: lute init   (or draft it: lute plan "<goal>")')
+    path = trusted_file(path, "manifest", shared_root or os.getcwd())
     root, schedules, errors = schema.load(path)
     if errors or not root:
         for error in errors:
@@ -166,19 +190,22 @@ def load_manifest(path: str, *, run_message: bool = False):
 
 
 def quarantine_records(paths: Paths) -> list[dict]:
+    store = StateStore(paths)
     records: list[dict] = []
-    if not os.path.isdir(paths.quarantine):
+    if not store.is_dir(paths.quarantine):
         return records
     for name in sorted(os.listdir(paths.quarantine)):
         if not QID_RE.fullmatch(name):
             continue
         qdir = os.path.join(paths.quarantine, name)
-        if not os.path.isdir(qdir):
+        if not store.is_dir(qdir):
             continue
         path = os.path.join(qdir, "meta.json")
+        patch = os.path.join(qdir, "changes.patch")
+        if not store.is_regular_file(path) or not store.is_regular_file(patch):
+            continue
         try:
-            with open(path, encoding="utf-8") as f:
-                record = json.load(f)
+            record = json.loads(store.read_text(path))
         except (OSError, ValueError):
             continue
         if not isinstance(record, dict):
@@ -189,7 +216,7 @@ def quarantine_records(paths: Paths) -> list[dict]:
         record["id"] = qid
         record["_meta"] = path
         record["_dir"] = qdir
-        record["_patch"] = os.path.join(qdir, "changes.patch")
+        record["_patch"] = patch
         records.append(record)
     return records
 
@@ -264,10 +291,6 @@ def local_check_paths(command: str) -> list[str]:
     return sorted(set(candidates))
 
 
-def has_time_budget(loop: LoopSpec) -> bool:
-    return any(limit.kind == "secs" for limit in loop.budget.limits)
-
-
 def is_placeholder_check(command: str) -> bool:
     try:
         parts = shlex.split(command.strip())
@@ -312,9 +335,10 @@ def circular_exam_target(command: str) -> str | None:
 def cmd_run(args: list[str]) -> int:
     pos, opts = parse(args, {"--agent", "--file"}, {"--plain", "--bg", "--dry-run", "--skip-if-running"})
     need_pos(pos, "usage: lute run [root-id]", 0, 1)
-    ctx0, git, store, _ = make_runtime()
+    ctx0, git, store = make_context()
     manifest = os.path.abspath(opts.get("file") or default_file())
-    root, _ = load_manifest(manifest, run_message=True)
+    manifest = trusted_file(manifest, "manifest", ctx0.shared_root)
+    root, _ = load_manifest(manifest, run_message=True, shared_root=ctx0.shared_root)
     child_mode = "LUTE_STATE_DIR" in os.environ
     target = resolved_loop(root, pos[0] if pos else None, child_mode)
     ctx = AppContext(git.root, store.paths, load_config(store.paths.config), manifest, str(root.id), RunMode.CHILD if child_mode else RunMode.FILE, bool(opts.get("plain")))
@@ -406,7 +430,7 @@ def cmd_plan(args: list[str]) -> int:
     if not agent:
         raise UsageError(f"no agent: pass --agent or set agent in {ctx.paths.config}")
     dag_instructions = dag_plan_instructions(bool(opts.get("keep-dag"))) if opts.get("dag") else ""
-    check = f"{self_cmd()} lint lute.proposed.yaml"
+    check = f"{self_cmd()} lint --no-exec lute.proposed.yaml"
     if opts.get("keep-dag"):
         check = f"test -f lute.plan.yaml && {check}"
     task = build_plan_task(pos[0], source, body, repo_briefing(pos[0], git), dag_instructions)
@@ -429,15 +453,17 @@ def cmd_plan(args: list[str]) -> int:
 
 
 def cmd_lint(args: list[str]) -> int:
-    pos, opts = parse(args, {"--agent"})
+    pos, opts = parse(args, {"--agent"}, {"--no-exec"})
     need_pos(pos, "usage: lute lint [file]", 0, 1)
     ctx, git, store, runner = make_runtime()
     path = pos[0] if pos else default_file()
     if not os.path.exists(path):
         raise PreconditionError(f'no {path} here; scaffold one: lute init   (or draft it: lute plan "<goal>")')
+    path = trusted_file(path, "manifest", ctx.shared_root)
     root, schedules, errors = schema.load(path)
     warnings, counts = [], {"pass": 0, "fail": 0, "error": 0, "not_yet": 0, "skipped": 0}
     if root:
+        no_exec = bool(opts.get("no-exec"))
         default_agent = opts.get("agent") or ctx.config.get("agent")
         judge_cmd = ctx.config.get("judge")
         cage = ctx.config.get("cage")
@@ -492,19 +518,25 @@ def cmd_lint(args: list[str]) -> int:
                         warnings.append(f"{loop.id}: judge equals the worker agent; the doer must not grade its own homework (§6)")
                     if loop.confirm < 2:
                         warnings.append(f"{loop.id}: judge: checks should use confirm: 2")
-                    if caged:
+                    if caged or no_exec:
                         cls = "skipped"
-                        warnings.append(f"{loop.id}: judge dry-run skipped under cage; verify the judge exists in {ctx.config.get('cage_image', 'alpine:3')}")
+                        why = "no-exec lint" if no_exec else "cage"
+                        warnings.append(f"{loop.id}: judge dry-run skipped under {why}; verify the judge exists in {ctx.config.get('cage_image', 'alpine:3')}")
                     elif not resolvable(judge_cmd):
                         errors.append(f"{loop.id}: judge: check but no resolvable judge in {ctx.paths.config}")
                         cls = "error"
                     else:
                         cls = runner.checks.run(loop).verdict.value
             else:
-                cls = runner.checks.run(loop, classify=True).verdict.value
+                if no_exec:
+                    cls = "skipped"
+                    if subprocess.run(["sh", "-n", "-c", loop.done_when.command], capture_output=True).returncode:
+                        cls = "error"
+                else:
+                    cls = runner.checks.run(loop, classify=True).verdict.value
                 if cls == "error":
                     errors.append(f"{loop.id}: done_when not administrable: `{loop.done_when.command}` (command not found / not on PATH, or not valid shell)")
-                if cls == "not_yet" and not has_time_budget(loop):
+                if cls == "not_yet" and runner.budget.secs_cap(loop) is None:
                     errors.append(
                         f"{loop.id}: done_when returned 75 but budget has no time cap; "
                         "not-yet loops need an s/m/h budget because run budgets do not tick while waiting"
@@ -606,6 +638,7 @@ def cmd_quarantine(args: list[str]) -> int:
     pos, opts = parse(args, set(), {"--all"})
     git = GitRepo.discover()
     paths = Paths.for_repo(git.root, os.environ.get("LUTE_STATE_DIR"))
+    store = StateStore(paths)
     records = quarantine_records(paths)
     verb = pos[0] if pos else "list"
     if verb == "list":
@@ -624,11 +657,7 @@ def cmd_quarantine(args: list[str]) -> int:
         record = next((r for r in records if r["id"] == qid), None)
         if not record:
             raise UsageError(f"no quarantine record {qid}")
-        try:
-            with open(record["_patch"], encoding="utf-8", errors="replace") as f:
-                sys.stdout.write(f.read())
-        except OSError as exc:
-            raise PreconditionError(f"quarantine patch missing for {qid}") from exc
+        sys.stdout.write(store.read_text(record["_patch"]))
         return 0
     if verb == "drop":
         if opts.get("all") and len(pos) == 1:
@@ -654,7 +683,7 @@ def cmd_status(args: list[str]) -> int:
     pos, _ = parse(args, set())
     need_pos(pos, "usage: lute status [file]", 0, 1)
     ctx, git, store, runner = make_runtime()
-    root, _ = load_manifest(pos[0] if pos else default_file())
+    root, _ = load_manifest(pos[0] if pos else default_file(), shared_root=ctx.shared_root)
     render_status(root, runner.checks, runner.cards, ctx.paths.ledger)
     return 0
 
@@ -666,7 +695,7 @@ def cmd_watch(args: list[str]) -> int:
         render_filtered(opts["filter"])
         return 0
     ctx, git, store, runner = make_runtime()
-    root, _ = load_manifest(pos[0] if pos else default_file())
+    root, _ = load_manifest(pos[0] if pos else default_file(), shared_root=ctx.shared_root)
     if opts.get("json"):
         render_json(root, ctx.paths.events, runner.cards)
     else:
@@ -699,10 +728,9 @@ def cmd_stop(args: list[str]) -> int:
     except (OSError, ValueError):
         info = {}
     pid = info.get("pid")
-    entry = entrypoint_path()
     # Identify the runner from the lock (host-derived, so we never signal the
     # wrong repo's run or a reused pid); then let it tear down what it owns.
-    serves = processes.serves_repo(pid, git.root) if processes.command_contains(pid, entry) else False
+    serves = processes.serves_repo(pid, git.root) if processes.pid_alive(pid) else False
     if serves is False:
         store.remove_runner_file(lock)
         print(f"no active run here; cleared a stale lock (pid {pid})")
@@ -726,7 +754,8 @@ def cmd_land(args: list[str]) -> int:
     need_pos(pos, "usage: lute land [branch]", 0, 1)
     ctx, git, store, runner = make_runtime()
     manifest = os.path.abspath(opts.get("file") or default_file())
-    root, _ = load_manifest(manifest)
+    manifest = trusted_file(manifest, "manifest", ctx.shared_root)
+    root, _ = load_manifest(manifest, shared_root=ctx.shared_root)
     ctx.manifest_path = manifest
     ctx.root_id = str(root.id)
     land(runner, root, pos[0] if pos else None, runner.cards, runner.checks)
@@ -739,7 +768,7 @@ def cmd_cron(args: list[str]) -> int:
     ctx, git, store, runner = make_runtime()
     root = schedules = None
     if args[0] == "sync":
-        root, schedules = load_manifest(default_file())
+        root, schedules = load_manifest(default_file(), shared_root=ctx.shared_root)
     sync_or_remove(args[0], git.root, root, schedules or [])
     return 0
 

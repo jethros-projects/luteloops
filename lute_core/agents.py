@@ -16,7 +16,7 @@ from .state_store import StateStore
 
 def run_agent_command(command: str, prompt: str, log_path: str) -> tuple[float, int | None]:
     started = time.time()
-    with open(log_path, "w") as log:
+    with processes.open_output(log_path, append=False) as log:
         proc = subprocess.Popen(
             ["sh", "-c", command],
             stdin=subprocess.PIPE,

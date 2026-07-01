@@ -20,12 +20,16 @@ def validate_schedules(schedules: list[dict], root_id: str) -> list[str]:
             errors.append(f"schedules: '{schedule['run']}' is not the root; only the root loop '{root_id}' is schedulable")
         elif not isinstance(schedule["at"], str) or len(schedule["at"].split()) != 5:
             errors.append(f"schedules: bad cron expression {schedule['at']!r} (need 5 fields)")
+        elif "\n" in schedule["at"] or "\r" in schedule["at"]:
+            errors.append("schedules: cron expression must be a single line")
     return errors
 
 
 def sync_or_remove(action: str, repo: str, root: LoopSpec | None, schedules: list[dict]) -> None:
     if action not in ("sync", "remove"):
         raise UsageError("usage: lute cron sync|remove")
+    if "\n" in repo or "\r" in repo:
+        raise UsageError("repo path contains a newline; refusing to write an ambiguous crontab block")
     begin, end = f"# BEGIN lute {repo}", f"# END lute {repo}"
     result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     if result.returncode and "no crontab" not in (result.stderr or "").lower():

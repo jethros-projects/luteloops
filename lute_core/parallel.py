@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-import shutil
 import signal
 import subprocess
+import stat
 
 from . import processes
 from .domain import LoopSpec
@@ -25,13 +25,27 @@ def pid_file(runner, child: LoopSpec) -> str:
     return worktree_dir(runner, child) + ".pid"
 
 
+def valid_worktree(runner, worktree: str) -> bool:
+    try:
+        root = os.path.realpath(runner.ctx.paths.worktrees)
+        real = os.path.realpath(worktree)
+        if os.path.commonpath([root, real]) != root:
+            return False
+        st = os.lstat(worktree)
+        git_st = os.lstat(os.path.join(worktree, ".git"))
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode) and stat.S_ISREG(git_st.st_mode) and not stat.S_ISLNK(git_st.st_mode)
+
+
 def ensure_worktree(runner, child: LoopSpec, head: str) -> str:
     worktree, branch = worktree_dir(runner, child), child_branch(runner, child)
+    runner.store.ensure_dir(runner.ctx.paths.worktrees)
     runner.git.worktree_prune()
-    if os.path.isfile(os.path.join(worktree, ".git")):
+    if valid_worktree(runner, worktree):
         return worktree
-    if os.path.exists(worktree):
-        shutil.rmtree(worktree, ignore_errors=True)
+    if os.path.lexists(worktree):
+        runner.store.remove_runner_file(worktree)
     if runner.git.branch_exists(branch):
         runner.git.worktree_add(worktree, branch)
     else:
@@ -42,26 +56,24 @@ def ensure_worktree(runner, child: LoopSpec, head: str) -> str:
 def reap_orphans(runner, children: list[LoopSpec]) -> None:
     for child in children:
         try:
-            pid_text, path = (open(pid_file(runner, child)).read().split("\n", 1) + [""])[:2]
-            pid = int(pid_text)
-        except (ValueError, OSError):
+            lines = runner.store.read_text(pid_file(runner, child)).splitlines()
+            pid = int(lines[0])
+        except (IndexError, ValueError, OSError):
             continue
         if pid and processes.pid_alive(pid):
-            cmd = processes.command_line(pid)
-            if path and path in cmd and f"run {child.id} --plain" in cmd:
-                try:
-                    os.killpg(pid, 9)
-                except Exception:
-                    try:
-                        os.kill(pid, 9)
-                    except Exception:
-                        pass
+            serves = processes.serves_repo(pid, worktree_dir(runner, child))
+            if serves is True and f"run {child.id} --plain" in processes.command_line(pid):
+                processes.stop_group(pid)
+            elif serves is False:
+                runner.store.remove_runner_file(pid_file(runner, child))
 
 
 def drop_worktree(runner, child: LoopSpec) -> None:
     worktree, branch = worktree_dir(runner, child), child_branch(runner, child)
-    if os.path.exists(worktree):
+    if valid_worktree(runner, worktree):
         runner.git.worktree_remove(worktree)
+    elif os.path.lexists(worktree):
+        runner.store.remove_runner_file(worktree)
     runner.git.delete_branch(branch)
     try:
         os.remove(pid_file(runner, child))
@@ -73,10 +85,9 @@ def spawn_child(runner, child: LoopSpec, worktree: str, slot: int):
     trusted_base = runner.ctx.trusted_base or runner.git.branch_base()
     env = dict(os.environ, LUTE_STATE_DIR=runner.ctx.paths.state, LUTE_SLOT=str(slot), LUTE_TRUSTED_BASE=trusted_base)
     cmd = [*self_argv(), "run", str(child.id), "--plain", "--file", runner.ctx.manifest_path]
-    marker = cmd[2] if len(cmd) > 2 and cmd[1] == "-m" else cmd[1]
     runner.store.ensure_layout()
     proc = processes.spawn_detached(cmd, cwd=worktree, env=env, stdout_path=runner.ctx.paths.runner_log)
-    runner.store.safe_write_regular(pid_file(runner, child), f"{proc.pid}\n{marker}")
+    runner.store.safe_write_regular(pid_file(runner, child), f"{proc.pid}\n{worktree}\n")
     return proc
 
 
@@ -162,7 +173,13 @@ def run_parallel(runner, parent: LoopSpec, agents_by_loop: dict[str, str | None]
     if pending:
         pending_children = [child for _, child in pending]
         reap_orphans(runner, pending_children)
-        procs = [(child, spawn_child(runner, child, ensure_worktree(runner, child, head), slot)) for slot, child in pending]
+        procs = []
+        try:
+            for slot, child in pending:
+                procs.append((child, spawn_child(runner, child, ensure_worktree(runner, child, head), slot)))
+        except BaseException:
+            stop_children(procs)
+            raise
         runner.events.emit("parallel", str(parent.id), children=[str(child.id) for child, _ in procs])
         results = join_children(procs)
         codes = [code for _, code in results if code != 0]

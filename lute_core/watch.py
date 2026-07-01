@@ -94,5 +94,5 @@ def render_json(root: LoopSpec, events_path: str, cards: CardService) -> None:
 
 
 def render_filtered(path: str) -> None:
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         print(noise_filter(f.read()), end="")

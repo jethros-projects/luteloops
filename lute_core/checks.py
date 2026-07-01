@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
-import shlex
 import subprocess
 
 from .context import AppContext
@@ -47,6 +48,7 @@ def run_command(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT if combine_stderr else subprocess.PIPE,
         encoding="utf-8",
+        errors="replace",
         text=True,
         env=env,
         start_new_session=True,
@@ -95,9 +97,16 @@ class CheckRunner:
     def run(self, loop: LoopSpec, *, classify: bool = False, env: dict[str, str] | None = None) -> CheckResult:
         command = loop.done_when.command
         if command.startswith("judge:"):
-            # `judge:` is sugar for the `lute judge` oracle — a plain command
-            # whose exit code is the verdict, like every other done_when.
             rubric = command[len("judge:"):].strip()
-            command = f"{self.self_cmd()} judge -- {shlex.quote(rubric)}"
+            return self.run_judge(rubric)
         verdict, output = run_shell_check(command, check_timeout(), classify=classify, env=env)
         return CheckResult(Verdict(verdict), output)
+
+    def run_judge(self, rubric: str) -> CheckResult:
+        from . import judge
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = judge.grade(rubric, self.ctx, self.git, self.cage_wrap)
+        output = tail(out.getvalue() + err.getvalue(), 50)
+        return CheckResult(Verdict.PASS if rc == 0 else Verdict.FAIL, output)
