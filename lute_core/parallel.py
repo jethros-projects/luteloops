@@ -70,7 +70,8 @@ def reap_orphans(runner, children: list[LoopSpec]) -> None:
         if owned is None or (owned and not processes.stop_group(pid)):
             raise PreconditionError(
                 f"a previous run's child (pid {pid}) may still be using {worktree}; "
-                f"confirm it is gone (kill -0 {pid}), then re-run"
+                f"stop it if it is a lute run (kill -INT {pid}), or if that pid is now an "
+                f"unrelated process, delete {pid_file(runner, child)} and re-run"
             )
         runner.store.remove_runner_file(pid_file(runner, child))
 

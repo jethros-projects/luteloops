@@ -158,6 +158,27 @@ class ConfigTests(unittest.TestCase):
                 # a second authority converges on the same key, never regenerates
                 self.assertEqual(self._authority(td).key(), key)
 
+    def test_non_regular_node_at_key_path_is_rejected_not_hung(self):
+        # A FIFO planted at the deterministic key path must fail closed, not
+        # block forever in open() waiting for a writer.
+        import signal
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("no mkfifo")
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as keys:
+            with mock.patch.dict(os.environ, {"LUTE_KEY_DIR": keys}):
+                os.mkfifo(self._key_path(td, keys))
+
+                def alarm(*_):
+                    raise TimeoutError("key() blocked on the FIFO")
+                old = signal.signal(signal.SIGALRM, alarm)
+                signal.alarm(3)
+                try:
+                    with self.assertRaises(PreconditionError):
+                        self._authority(td).key()
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old)
+
     def test_partially_written_key_is_rejected_not_trusted(self):
         # A crash between create and write used to leave an empty key file that
         # every later run silently trusted ('' forever) - a forgeable authority.
@@ -308,9 +329,12 @@ class ReapOrphanTests(unittest.TestCase):
         with mock.patch.object(processes, "pid_alive", return_value=True), \
              mock.patch.object(processes, "proc_cwd", return_value=None), \
              mock.patch.object(processes, "stop_group") as stop_group:
-            with self.assertRaisesRegex(PreconditionError, "confirm"):
+            with self.assertRaises(PreconditionError) as caught:
                 parallel.reap_orphans(runner, [child])
             stop_group.assert_not_called()
+        # the remediation must name the actual escape hatch — the pid file — not
+        # only an unsatisfiable "confirm it is gone" loop for a recycled pid
+        self.assertIn("root__kid.pid", str(caught.exception))
 
 
 class SpawnWindowTests(unittest.TestCase):
