@@ -93,9 +93,7 @@ def spawn_child(runner, child: LoopSpec, worktree: str, slot: int):
     env = dict(os.environ, LUTE_STATE_DIR=runner.ctx.paths.state, LUTE_SLOT=str(slot), LUTE_TRUSTED_BASE=trusted_base)
     cmd = [*self_argv(), "run", str(child.id), "--plain", "--file", runner.ctx.manifest_path]
     runner.store.ensure_layout()
-    proc = processes.spawn_detached(cmd, cwd=worktree, env=env, stdout_path=runner.ctx.paths.runner_log)
-    runner.store.safe_write_regular(pid_file(runner, child), f"{proc.pid}\n{worktree}\n")
-    return proc
+    return processes.spawn_detached(cmd, cwd=worktree, env=env, stdout_path=runner.ctx.paths.runner_log)
 
 
 def stop_children(procs) -> None:
@@ -183,7 +181,10 @@ def run_parallel(runner, parent: LoopSpec, agents_by_loop: dict[str, str | None]
         procs = []
         try:
             for slot, child in pending:
-                procs.append((child, spawn_child(runner, child, ensure_worktree(runner, child, head), slot)))
+                worktree = ensure_worktree(runner, child, head)
+                proc = spawn_child(runner, child, worktree, slot)
+                procs.append((child, proc))  # own the child the instant it exists ...
+                runner.store.safe_write_regular(pid_file(runner, child), f"{proc.pid}\n{worktree}\n")  # ... THEN do fallible bookkeeping
         except BaseException:
             stop_children(procs)
             raise
