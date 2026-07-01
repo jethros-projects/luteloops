@@ -172,8 +172,14 @@ def _current_record(path: str) -> FileRecord | None:
         raw = os.readlink(path).encode()
         return FileRecord(path, "symlink", 0o777, _sha(raw), "worktree", raw)
     if stat.S_ISREG(st.st_mode):
-        with open(path, "rb") as f:
-            raw = f.read()
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError:
+            # An unreadable watched file (chmod 000) is a change, not a crash:
+            # the mismatch quarantines it and restores a readable trusted copy.
+            raw = b"<unreadable>"
+            return FileRecord(path, "unreadable", mode, _sha(raw), "worktree", raw)
         return FileRecord(path, "file", mode, _sha(raw), "worktree", raw)
     if stat.S_ISDIR(st.st_mode):
         raw = b"<directory>"
