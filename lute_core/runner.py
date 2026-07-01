@@ -83,8 +83,9 @@ class Runner:
             self.agents.fire_halt,
         )
         self._lock_registered = False
-        self.quarantine_notes: dict[str, list[str]] = {}
-        self.quarantine_paths: dict[str, set[str]] = {}
+        # Quarantines whose story has not yet been told: a run-time quarantine
+        # is reported by the NEXT administration of that loop's check.
+        self.pending_quarantines: dict[str, list] = {}
 
     def ledger_entries(self) -> list[dict]:
         return read_entries(self.ctx.paths.ledger)
@@ -211,20 +212,15 @@ class Runner:
         loop_id = str(loop.id)
         self.enforce_quarantine(loop, "precheck", baseline)
         result = self.checks.run(loop, env=env)
-        verdict, tail_text = result.verdict, result.output
-        tampered = sorted(self.quarantine_paths.get(loop_id, set()))
-        postcheck = self.enforce_quarantine(loop, "postcheck", baseline)
-        if postcheck:
-            tampered = sorted(self.quarantine_paths.get(loop_id, set()))
-            verdict = Verdict.FAIL
-            tail_text = self.quarantine_message(loop_id)
-        elif verdict == Verdict.FAIL:
-            note = self.pop_quarantine_note(loop_id)
-            if note:
-                tail_text = note + ("\n" + tail_text if tail_text else "")
-        elif verdict == Verdict.PASS:
-            self.pop_quarantine_note(loop_id)
-            tampered = []
+        post = self.enforce_quarantine(loop, "postcheck", baseline)
+        verdict, tail_text = (Verdict.FAIL, "") if post else (result.verdict, result.output)
+        # Every administration drains its quarantines: a tamper note explains
+        # THIS check's failure and never resurfaces on a later, unrelated one.
+        quarantines = self.pending_quarantines.pop(loop_id, [])
+        if quarantines and verdict == Verdict.FAIL:
+            note = "\n".join(quarantine_note(q) for q in quarantines)
+            tail_text = note + ("\n" + tail_text if tail_text else "")
+        tampered = sorted({path for q in quarantines for path in q.paths}) if verdict != Verdict.PASS else []
         self.events.emit(
             "check",
             loop_id,
@@ -297,21 +293,8 @@ class Runner:
         patch = os.path.relpath(result.patch_path, self.ctx.repo_root)
         self.events.emit("quarantine", str(loop.id), run=run_id, id=result.qid, paths=list(result.paths), patch=patch, restored=True)
         self.ctx.quarantined_paths.update(result.paths)
-        self.quarantine_paths.setdefault(str(loop.id), set()).update(result.paths)
-        self.quarantine_notes.setdefault(str(loop.id), []).append(
-            f"Trusted exam edits were quarantined and restored before this check: {result.qid} ("
-            + ", ".join(result.paths)
-            + f"). Inspect with: lute quarantine diff {result.qid}"
-        )
+        self.pending_quarantines.setdefault(str(loop.id), []).append(result)
         return result
-
-    def quarantine_message(self, loop_id: str) -> str:
-        return self.pop_quarantine_note(loop_id) or "exam materials modified and quarantined; trusted exam files were restored before checking"
-
-    def pop_quarantine_note(self, loop_id: str) -> str:
-        notes = self.quarantine_notes.pop(loop_id, [])
-        self.quarantine_paths.pop(loop_id, None)
-        return "\n".join(notes)
 
     def close_loop(self, loop: LoopSpec, approved: bool) -> None:
         if loop.gate == Gate.HUMAN and not approved:
@@ -407,6 +390,14 @@ class Runner:
         except (ValueError, OSError):
             return None
         return info if processes.pid_alive(info.get("pid")) else None
+
+def quarantine_note(quarantine) -> str:
+    return (
+        f"Trusted exam edits were quarantined and restored before this check: {quarantine.qid} ("
+        + ", ".join(quarantine.paths)
+        + f"). Inspect with: lute quarantine diff {quarantine.qid}"
+    )
+
 
 def resolved_loop(root: LoopSpec, loop_id: str | None, child_mode: bool) -> LoopSpec:
     if not loop_id or loop_id == str(root.id):

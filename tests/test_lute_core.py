@@ -20,6 +20,7 @@ from lute_core.context import AppContext, Paths
 from lute_core.domain import LoopSpec, RunMode
 from lute_core.errors import Gated, PreconditionError
 from lute_core.git_repo import GitRepo
+from lute_core.runner import Runner
 from lute_core.state_store import StateStore
 
 
@@ -404,6 +405,54 @@ class CardAndEventTests(unittest.TestCase):
 
     def test_answer_auth_binds_answer_body(self):
         self.assertNotEqual(cards.answer_basis("READY\n", "no"), cards.answer_basis("READY\n", "approve"))
+
+
+class AdministerCheckTests(unittest.TestCase):
+    def test_quarantine_note_never_outlives_its_administration(self):
+        # A quarantine note explains the check it precedes. A not-yet verdict
+        # used to leave it queued, so a later, unrelated failure inherited a
+        # stale tamper accusation.
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+            Path(td, "seed").write_text("x")
+            subprocess.run(["git", "add", "seed"], cwd=td, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed"],
+                cwd=td, check=True,
+            )
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                repo = GitRepo(os.path.realpath(td))
+                ctx = AppContext(repo.root, Paths.for_repo(repo.root), {}, "", "x", RunMode.FILE)
+                ctx.trusted_base = repo.head()
+                runner = Runner(ctx, repo)
+                baseline = runner.protection.baseline(
+                    LoopSpec.from_normalized({"id": "x", "done_when": "true", "budget": []})
+                )
+
+                self.seed_note(runner)
+                not_yet = LoopSpec.from_normalized({"id": "x", "done_when": "exit 75", "budget": []})
+                verdict, _ = runner.administer_check(not_yet, baseline, 0)
+                self.assertEqual(verdict.value, "not_yet")
+
+                failing = LoopSpec.from_normalized({"id": "x", "done_when": "false", "budget": []})
+                verdict, tail_text = runner.administer_check(failing, baseline, 0)
+                self.assertEqual(verdict.value, "fail")
+                self.assertNotIn("stale-tamper-note", tail_text)
+            finally:
+                os.chdir(old)
+
+    @staticmethod
+    def seed_note(runner):
+        # a run-time quarantine queues its note/paths for the next administration
+        from lute_core.protection import QuarantineResult
+        result = QuarantineResult("stale-tamper-note", ("some/path",), "/q/patch", "/q/meta")
+        if hasattr(runner, "pending_quarantines"):
+            runner.pending_quarantines.setdefault("x", []).append(result)
+        else:  # pre-fix carriers
+            runner.quarantine_notes.setdefault("x", []).append("stale-tamper-note")
+            runner.quarantine_paths.setdefault("x", set()).update(result.paths)
 
 
 class CheckRunnerTests(unittest.TestCase):
