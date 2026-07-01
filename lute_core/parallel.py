@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import stat
 
 from . import processes
 from .domain import LoopSpec
-from .errors import Blocked, Gated, InternalError
+from .errors import Blocked, Gated, InternalError, PreconditionError
 from .runner import self_argv
 
 
@@ -54,18 +55,24 @@ def ensure_worktree(runner, child: LoopSpec, head: str) -> str:
 
 
 def reap_orphans(runner, children: list[LoopSpec]) -> None:
+    """A pid file left by a crashed parent may name a still-running child. Prove
+    each one ours (the same two-factor identity `lute stop` uses) and stop it, or
+    prove it gone — a worktree is never reused while its old runner might live."""
     for child in children:
         try:
-            lines = runner.store.read_text(pid_file(runner, child)).splitlines()
-            pid = int(lines[0])
+            pid = int(runner.store.read_text(pid_file(runner, child)).splitlines()[0])
         except (IndexError, ValueError, OSError):
             continue
-        if pid and processes.pid_alive(pid):
-            serves = processes.serves_repo(pid, worktree_dir(runner, child))
-            if serves is True and f"run {child.id} --plain" in processes.command_line(pid):
-                processes.stop_group(pid)
-            elif serves is False:
-                runner.store.remove_runner_file(pid_file(runner, child))
+        if pid <= 0:  # 0/negative address a process GROUP, never a child of ours
+            continue
+        worktree = worktree_dir(runner, child)
+        owned = processes.owns(pid, worktree, re.escape(f"run {child.id} --plain"))
+        if owned is None or (owned and not processes.stop_group(pid)):
+            raise PreconditionError(
+                f"a previous run's child (pid {pid}) may still be using {worktree}; "
+                f"confirm it is gone (kill -0 {pid}), then re-run"
+            )
+        runner.store.remove_runner_file(pid_file(runner, child))
 
 
 def drop_worktree(runner, child: LoopSpec) -> None:

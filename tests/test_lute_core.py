@@ -9,7 +9,7 @@ import io
 from pathlib import Path
 from unittest import mock
 
-from lute_core import cards, cli, cli_args, events, formatting, ledger, planner, processes, protection, schema
+from lute_core import cards, cli, cli_args, events, formatting, ledger, parallel, planner, processes, protection, schema
 from lute_core.cage import DEFAULT_CAGE_TEMPLATE, CageTemplate, expand_cage_template
 from lute_core.checks import CheckRunner
 from lute_core.config import freeze_config, load_config
@@ -207,12 +207,36 @@ class ProcessTests(unittest.TestCase):
                 out = io.StringIO()
                 with mock.patch.object(processes, "pid_alive", return_value=True), \
                      mock.patch.object(processes, "serves_repo", return_value=True), \
+                     mock.patch.object(processes, "command_line", return_value="python3 /usr/local/bin/lute run --plain\n"), \
                      mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
                      contextlib.redirect_stdout(out):
                     rc = cli.cmd_stop([])
                 self.assertEqual(rc, 0)
                 stop_run.assert_called_once_with(4242)
                 self.assertIn("stopped run pid 4242", out.getvalue())
+            finally:
+                os.chdir(old)
+
+    def test_stop_requires_the_argv_factor_not_just_repo_cwd(self):
+        # A stale lock naming a reused pid whose cwd happens to be inside the repo
+        # (your shell, your editor) must never be signalled: kill identity is
+        # two-factor - repo cwd AND a lute-run argv - the same identity reap uses.
+        with tempfile.TemporaryDirectory() as td:
+            self._seeded_repo_with_lock(td, 31337)
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.object(processes, "pid_alive", return_value=True), \
+                     mock.patch.object(processes, "serves_repo", return_value=True), \
+                     mock.patch.object(processes, "command_line", return_value="vim notes.txt\n"), \
+                     mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
+                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = cli.cmd_stop([])
+                self.assertEqual(rc, 1)
+                stop_run.assert_not_called()
+                self.assertTrue(Path(Paths.for_repo(td).lock).exists())
+                self.assertIn("could not confirm", err.getvalue())
             finally:
                 os.chdir(old)
 
@@ -235,6 +259,25 @@ class ProcessTests(unittest.TestCase):
                 stop_run.assert_not_called()  # never signal a run we cannot confirm is ours
             finally:
                 os.chdir(old)
+
+
+class ReapOrphanTests(unittest.TestCase):
+    def test_unprovable_orphan_refuses_instead_of_reusing_the_worktree(self):
+        # A pid file names a live pid but the host cannot determine its cwd
+        # (no /proc, no lsof): the orphan cannot be proven gone, so spawning a
+        # second runner into the same worktree must be refused, not risked.
+        runner = mock.Mock()
+        runner.ctx.paths.worktrees = "/repo/.lute/wt"
+        runner.ctx.root_id = "root"
+        runner.store.read_text.return_value = "4242\n/repo/.lute/wt/root__kid\n"
+        child = mock.Mock()
+        child.id = "kid"
+        with mock.patch.object(processes, "pid_alive", return_value=True), \
+             mock.patch.object(processes, "proc_cwd", return_value=None), \
+             mock.patch.object(processes, "stop_group") as stop_group:
+            with self.assertRaisesRegex(PreconditionError, "confirm"):
+                parallel.reap_orphans(runner, [child])
+            stop_group.assert_not_called()
 
 
 class CardAndEventTests(unittest.TestCase):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -85,6 +86,25 @@ def serves_repo(pid: int, repo_root: str) -> bool | None:
         return cwd == root or os.path.commonpath([cwd, root]) == root
     except ValueError:
         return False
+
+
+def owns(pid: int | None, repo_root: str, marker: str) -> bool | None:
+    """Is pid the runner a lock/pid file names? The file is just bytes — a crash
+    leaves it stale, the pid gets reused, and anything in the repo can write it —
+    so identity comes from live host facts the file cannot fake: the pid's cwd
+    is inside repo_root AND its command line matches marker (a regex for how
+    that runner was invoked). True = confirmed ours. False = provably not
+    (dead, or cwd known and elsewhere). None = unconfirmed: cwd unknown, or a
+    repo-cwd process whose argv does not match — ps evidence can confirm
+    identity, but its absence cannot refute it (wrappers, renames)."""
+    if not pid_alive(pid):
+        return False
+    serves = serves_repo(pid, repo_root)  # type: ignore[arg-type]
+    if serves is False:
+        return False
+    if serves and re.search(marker, command_line(pid)):
+        return True
+    return None
 
 
 def descendants(pid: int) -> list[int]:
