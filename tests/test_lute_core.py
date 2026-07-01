@@ -585,10 +585,13 @@ class FuzzParserTests(unittest.TestCase):
                 self.assertIsInstance(schedules, list)
                 self.assertTrue(loop is None or isinstance(loop, LoopSpec))
 
-    def _rand_entry(self, rng):
+    def _rand_entry(self, rng, lid="a"):
         keys = ["loop", "run", "duration", "event", "auth", "n", "ts", "junk"]
-        return {k: rng.choice(self._scalars(rng))
-                for k in rng.sample(keys, rng.randint(0, len(keys)))}
+        entry = {k: rng.choice(self._scalars(rng))
+                 for k in rng.sample(keys, rng.randint(0, len(keys)))}
+        if rng.random() < 0.5:   # bias many entries onto the queried loop so the
+            entry["loop"] = lid   # loop-scoped accounting path is actually fuzzed,
+        return entry              # not skipped by the `loop != lid` short-circuit.
 
     def test_ledger_accounting_is_total_and_safe_on_forged_entries(self):
         rng = random.Random(self.SEED + 2)
@@ -605,10 +608,42 @@ class FuzzParserTests(unittest.TestCase):
             self.assertIsInstance(runs, int)
             total_runs, total_secs = ledger.ledger_totals(entries)
             self.assertGreaterEqual(total_runs, 0)
-            # safe classification: forged answers whose token isn't our HMAC never
-            # authenticate, so a rewritten ledger can never mint a budget refund.
+            # safe classification: entries now reach the token comparison (loop==lid,
+            # event=="answer") with junk `auth` values that are never our HMAC, so a
+            # rewritten ledger still mints no budget refund. Non-vacuous: were the
+            # auth check dropped, some of these forgeries would count.
             self.assertEqual(
                 ledger.authenticated_answer_count(entries, "a", auth_for), 0
+            )
+
+    def test_ledger_authentication_discriminates_valid_from_forged(self):
+        # The positive + negative controls the broad fuzz can't express: only a
+        # genuine, distinct HMAC token authenticates; a right-shape / wrong-token
+        # forgery never does — so a rewritten ledger cannot mint a budget refund.
+        rng = random.Random(self.SEED + 4)
+        for _ in range(400):
+            entries, valid = [], set()
+            for i in range(rng.randint(0, 12)):
+                kind = rng.choice(["run", "forged", "valid", "junk"])
+                if kind == "run":
+                    entries.append({"loop": "a", "run": i, "duration": rng.random()})
+                elif kind == "forged":
+                    nonce = str(rng.randint(0, 4))  # right shape, deliberately wrong token
+                    entries.append({"loop": "a", "event": "answer", "n": nonce,
+                                    "auth": "forged-" + auth_for("a", nonce)})
+                elif kind == "valid":
+                    nonce = str(rng.randint(0, 4))
+                    token = auth_for("a", nonce)
+                    valid.add(token)
+                    entries.append({"loop": "a", "event": "answer", "n": nonce, "auth": token})
+                else:
+                    entries.append(self._rand_entry(rng))  # unrelated junk never authenticates
+            self.assertEqual(
+                ledger.authenticated_answer_count(entries, "a", auth_for), len(valid)
+            )
+            self.assertIsInstance(
+                ledger.budget_spent("a", [("runs", 3)], entries, auth_for, git_runs=len(entries)),
+                bool,
             )
 
     def test_ledger_jsonl_parser_ignores_malformed_lines(self):
