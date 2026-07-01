@@ -66,7 +66,7 @@ class Runner:
         self.authority = AnswerAuthority(ctx)
         self.budget = BudgetService(self.git, self.ledger_entries, self.authority.token)
         self.agents = AgentRunner(ctx, self.store, ctx.repo_root, self_cmd)
-        self.checks = CheckRunner(ctx, self.git, self.agents.cage_wrap)
+        self.checks = CheckRunner(ctx, self.git, self.agents.cage_wrap, self_cmd)
         self.protection = Protection(ctx, self.git)
         self.cards = CardService(
             ctx,
@@ -109,6 +109,7 @@ class Runner:
             self.ensure_branch(str(root.id))
             self.ctx.run_pre_untracked = self.git.untracked()
             self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
+            os.environ["LUTE_TRUSTED_BASE"] = self.ctx.trusted_base  # the pin a `lute judge` check reads
             self.store.ensure_layout()
             self.store.ensure_capture_ignore()
             self.seal_ignore(str(root.id))
@@ -128,6 +129,7 @@ class Runner:
             self.git.text("reset", "-q", "--hard")
         self.ctx.run_pre_untracked = self.git.untracked()
         self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
+        os.environ["LUTE_TRUSTED_BASE"] = self.ctx.trusted_base  # the pin a `lute judge` check reads
         freeze_config(self.ctx, self.git)
         self.require_human_authority_cage(target)
         self.run_loop(target, agents_by_loop)

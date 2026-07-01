@@ -112,6 +112,8 @@ budget: 48h
 
 ## 5. judge: rules
 
+`judge: <rubric>` is sugar for the ordinary command `lute judge -- "<rubric>"`: the judge is a normal `done_when` whose exit code is the verdict, not a special mode. It grades only the stdin diff in an empty working directory.
+
 Use a judge only when executable checks cannot capture the residue (quality, tone, coverage-by-meaning). Then, all four guardrails, always:
 
 1. The judge model must differ from the worker agent of that loop (lint warns; you should never rely on the warning).

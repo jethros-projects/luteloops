@@ -157,7 +157,7 @@ def run_parallel(runner, parent: LoopSpec, agents_by_loop: dict[str, str | None]
     pending = [
         (index, child)
         for index, child in enumerate(parent.children, 1)
-        if child.children or child.gate or runner.checks.run(child, lenient=True).verdict.value != "pass"
+        if child.children or child.gate or runner.checks.run(child).verdict.value != "pass"
     ]
     if pending:
         pending_children = [child for _, child in pending]
