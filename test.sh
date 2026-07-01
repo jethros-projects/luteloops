@@ -318,6 +318,10 @@ loops:
     task: build the thing
     done_when: "test -f done.flag"
     protected: ["done.flag"]
+  - loop: dot-grounded
+    task: build the thing
+    done_when: "test -f ./done.flag"
+    protected: ["done.flag"]
 EOF
   seal
   rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
@@ -326,6 +330,10 @@ EOF
     || die "7circ) circular exam not flagged: $(cat lint.out)"
   grep -Eq 'grounded:.*only checks that done.flag' lint.out \
     && die "7circ) protecting the ground-truth file should silence the circular warning: $(cat lint.out)"
+  # the probe path is normalized like a protected: glob, so a ./-spelled probe is
+  # silenced by protecting the plain name (the escape hatch the message advises).
+  grep -Eq 'dot-grounded:.*only checks that' lint.out \
+    && die "7circ) ./-spelled probe must normalize so protected: done.flag silences it: $(cat lint.out)"
   true
 }
 
