@@ -460,6 +460,34 @@ class CliAndProtectionTests(unittest.TestCase):
             finally:
                 os.chdir(old)
 
+    def test_reaches_below_glob_semantics(self):
+        rb = protection.reaches_below
+        self.assertTrue(rb("**/conftest.py", "node_modules"))   # ** reaches under any dir
+        self.assertTrue(rb("exam/**", "exam/sub"))
+        self.assertFalse(rb("exam/**", "other"))
+        self.assertTrue(rb("exam/sub/q.txt", "exam"))           # a symlink AT an ancestor conceals the leaf
+        self.assertFalse(rb("exam/*.txt", "exam/sub"))          # single-level glob cannot reach deeper
+        self.assertFalse(rb("exam", "exam"))                    # exact match is the name matcher's job
+
+    def test_symlink_that_can_conceal_protected_content_is_watched(self):
+        # A symlinked dir hides its subtree from the walk, so a symlink the glob
+        # can reach below must surface as protected content itself — not only
+        # one whose own name happens to match the glob.
+        with tempfile.TemporaryDirectory() as td:
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                os.makedirs("exam")
+                Path("exam/answer.txt").write_text("GENUINE\n")
+                outside = tempfile.mkdtemp()
+                Path(outside, "answer.txt").write_text("FORGED\n")
+                os.symlink(outside, "planted")
+                self.assertIn("planted", protection.protected_files(["**/answer.txt"]))
+                # a symlink the glob cannot reach below stays unwatched (no noise)
+                self.assertNotIn("planted", protection.protected_files(["exam/*.txt"]))
+            finally:
+                os.chdir(old)
+
     def test_quarantine_list_diff_and_drop(self):
         with tempfile.TemporaryDirectory() as td:
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)

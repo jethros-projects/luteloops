@@ -44,6 +44,23 @@ def glob_re(pattern: str) -> re.Pattern[str]:
     return re.compile("(?s:" + "".join(out) + r")\Z")
 
 
+def reaches_below(pattern: str, rel: str) -> bool:
+    """Could the glob match somewhere BENEATH rel/? A symlinked directory hides
+    its subtree from both the worktree walk and ls-tree name-matching, so a
+    symlink the glob can reach below can conceal protected content and must be
+    watched like protected content itself."""
+    def rec(pseg: list[str], rseg: list[str]) -> bool:
+        if not rseg:
+            return bool(pseg)  # pattern has segments left to match beneath rel
+        if not pseg:
+            return False
+        if "**" in pseg[0]:
+            return True  # ** crosses directories: anything beneath is reachable
+        return bool(glob_re(pseg[0]).match(rseg[0])) and rec(pseg[1:], rseg[1:])
+
+    return rec(pattern.split("/"), rel.split("/"))
+
+
 def protected_files(globs: list[str]) -> list[str]:
     matchers = [glob_re(g) for g in globs]
     files: list[str] = []
@@ -54,7 +71,7 @@ def protected_files(globs: list[str]) -> list[str]:
                 continue
             rel = os.path.relpath(os.path.join(root, name), ".")
             if os.path.islink(os.path.join(root, name)):
-                if any(m.match(rel) for m in matchers):
+                if any(m.match(rel) for m in matchers) or any(reaches_below(g, rel) for g in globs):
                     files.append(rel)
                 continue
             kept_dirs.append(name)
@@ -244,12 +261,19 @@ class Protection:
                 continue
             meta_b, sep, path_b = entry.partition(b"\t")
             path = os.fsdecode(path_b)
-            if not path or not any(m.match(path) for m in matchers):
+            if not path:
                 continue
             meta = meta_b.decode("ascii", "replace")
             mode_s, git_type, object_id = meta.split()[:3]
             full_mode = int(mode_s, 8)
             kind = _kind_from_mode(full_mode, git_type)
+            # Committed symlinks the glob can reach below are watched too, so the
+            # walk (which watches them live) and the baseline stay symmetric.
+            watched = any(m.match(path) for m in matchers) or (
+                kind == "symlink" and any(reaches_below(g, path) for g in globs)
+            )
+            if not watched:
+                continue
             mode = _git_record_mode(full_mode, kind)
             raw = self.git.object_bytes(object_id)
             digest = object_id if raw is None else _sha(raw)
