@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import subprocess
 import tempfile
 import unittest
@@ -522,6 +523,102 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(ctx.manifest_path, "/repo/lute.yaml")
         self.assertEqual(ctx.root_id, "root")
         self.assertEqual(ctx.active_config()["agent"], "true")
+
+
+class FuzzParserTests(unittest.TestCase):
+    """The two parsers that turn untrusted text into trusted decisions are the
+    invariant's soft underbelly: `schema.load` (the manifest an author writes)
+    and the `ledger` accounting (the JSONL an adversarial agent can rewrite).
+    Feed each malformed and random input and assert it never crashes and never
+    misclassifies junk into a pass or a budget refund (see INVARIANT.md)."""
+
+    SEED = 0xC0FFEE  # fixed so the fuzz is deterministic and reproducible
+
+    def _scalars(self, rng):
+        return [
+            None, True, False, 0, 1, -1, rng.randint(-(10**9), 10**9),
+            rng.random() * 1e6, -rng.random() * 1e6, float("inf"), float("nan"),
+            "", "x" * rng.randint(0, 6), "10 runs", "run", "answer", "human",
+            "60s", "\x00", "🙂", "-", "--", "/", "..", "true", [], {}, [1, 2],
+            {"k": 1}, ("t",),
+        ]
+
+    def _rand_node(self, rng, depth=0):
+        keys = ["loop", "task", "agent", "done_when", "budget", "confirm",
+                "loops", "check_every", "gate", "protected", "parallel", "xyz"]
+        node = {}
+        for k in rng.sample(keys, rng.randint(0, len(keys))):
+            node[k] = rng.choice(self._scalars(rng))
+        if depth < 3 and rng.random() < 0.5:
+            node["loops"] = [self._rand_node(rng, depth + 1)
+                             for _ in range(rng.randint(0, 3))]
+        return node
+
+    def test_schema_norm_loop_never_crashes_on_garbage(self):
+        rng = random.Random(self.SEED)
+        for _ in range(600):
+            errors = []
+            node = rng.choice([self._rand_node(rng), rng.choice(self._scalars(rng))])
+            loop = schema.norm_loop(node, errors, set())
+            self.assertIsInstance(errors, list)
+            if loop is not None:
+                # a normalized loop is always fully typed and buildable
+                self.assertIsInstance(loop["id"], str)
+                self.assertIsInstance(loop["done_when"], str)
+                self.assertIsInstance(loop["confirm"], int)
+                self.assertIsInstance(loop["budget"], list)
+                spec = LoopSpec.from_normalized(loop)  # must never raise
+                self.assertIsInstance(str(spec.id), str)
+
+    def test_schema_load_returns_a_clean_triple_for_any_text(self):
+        rng = random.Random(self.SEED + 1)
+        fragments = ["loop: r\n", "done_when:\n", "budget: 9\n", "- - -\n",
+                     "\t: :\n", "loops: 3\n", "confirm: nope\n", "gate: []\n",
+                     ": !!python/object\n", "\x00\x00\n", "{{{\n", "%YAML\n"]
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "lute.yaml")
+            for _ in range(400):
+                text = "".join(rng.choice(fragments) for _ in range(rng.randint(0, 6)))
+                Path(path).write_text(text)
+                loop, schedules, errors = schema.load(path)  # must never raise
+                self.assertIsInstance(errors, list)
+                self.assertIsInstance(schedules, list)
+                self.assertTrue(loop is None or isinstance(loop, LoopSpec))
+
+    def _rand_entry(self, rng):
+        keys = ["loop", "run", "duration", "event", "auth", "n", "ts", "junk"]
+        return {k: rng.choice(self._scalars(rng))
+                for k in rng.sample(keys, rng.randint(0, len(keys)))}
+
+    def test_ledger_accounting_is_total_and_safe_on_forged_entries(self):
+        rng = random.Random(self.SEED + 2)
+        for _ in range(600):
+            entries = [self._rand_entry(rng) for _ in range(rng.randint(0, 25))]
+            # a well-formed, author-trusted budget (as parse_budget always yields)
+            budget = [("runs", rng.randint(0, 40)), ("secs", rng.randint(0, 120))]
+            git_runs = rng.randint(0, 80)
+            spent = ledger.budget_spent(
+                "a", budget, entries, auth_for, git_runs, waited=rng.random() * 10
+            )
+            self.assertIsInstance(spent, bool)  # never raises, always a verdict
+            runs, secs = ledger.runs_since_authenticated_answer(entries, "a", auth_for)
+            self.assertIsInstance(runs, int)
+            total_runs, total_secs = ledger.ledger_totals(entries)
+            self.assertGreaterEqual(total_runs, 0)
+            # safe classification: forged answers whose token isn't our HMAC never
+            # authenticate, so a rewritten ledger can never mint a budget refund.
+            self.assertEqual(
+                ledger.authenticated_answer_count(entries, "a", auth_for), 0
+            )
+
+    def test_ledger_jsonl_parser_ignores_malformed_lines(self):
+        rng = random.Random(self.SEED + 3)
+        chunks = ['{"loop":"a","run":1}', "{truncated", "", "null", "[1,2]",
+                  '{"x":', "\x00", '"scalar"', "42", '{"loop":"a","event":"answer"}']
+        for _ in range(400):
+            text = "\n".join(rng.choice(chunks) for _ in range(rng.randint(0, 8)))
+            entries = ledger._parse_jsonl_lines(text.splitlines())  # never raises
+            self.assertTrue(all(isinstance(e, dict) for e in entries))
 
 
 if __name__ == "__main__":
