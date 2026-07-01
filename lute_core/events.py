@@ -14,7 +14,7 @@ from .state_store import StateStore
 GLYPH_WORD = {"✔": "done", "↻": "running", "⏳": "waiting", "◌": "pending",
               "✗": "blocked", "✋": "gated", "‖": "parallel"}
 ASCII_MAP = {"▶": ">", "↻": "~", "↳": "<", "✔": "OK", "✗": "X", "✋": "GATE", "⏳": "WAIT",
-             "‖": "||", "⚠": "!", "·": "-", "→": "->", "…": "..."}
+             "‖": "||", "⚠": "!", "·": "-", "×": "x", "→": "->", "…": "..."}
 
 
 def now_iso() -> str:

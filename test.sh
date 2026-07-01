@@ -564,6 +564,11 @@ t_t13() { # noise-filter: a repeated block collapses to one copy + ×N; clean lo
   printf 'alpha\nbeta\ngamma\ndelta\nepsilon\n' > clean.log
   "$LUTE" watch --filter clean.log > c.out 2>&1 || die "filter failed on a clean log"
   cmp -s clean.log c.out || die "clean log did not pass through byte-identical"
+  # the repeat marker renders through the same ASCII fallback as every other
+  # renderer: --- x4, not raw \xb7\xb7\xb7 \xd74 escapes
+  rc=0; LC_ALL=C PYTHONUTF8=0 PYTHONIOENCODING=ascii "$LUTE" watch --filter rep.log > a.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "filter crashed on ascii stdout: $(cat a.out)"
+  grep -q -- '--- x4' a.out || die "ascii stdout did not get the mapped repeat marker: $(cat a.out)"
 }
 
 # ---------------------------------------------------------------- T14
