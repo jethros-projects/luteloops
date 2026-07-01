@@ -29,7 +29,7 @@ def render_status(root: LoopSpec, checks: CheckRunner, cards: CardService, ledge
         if loop_id in waiting:
             mark = "✋" if waiting[loop_id]["gated"] else "✗"
         else:
-            result = checks.run(loop, lenient=True)
+            result = checks.run(loop)
             mark = {"pass": "✔", "not_yet": "⏳"}.get(result.verdict.value) or (
                 "↻" if total_runs(read_entries(ledger_path), loop_id) else "◌"
             )

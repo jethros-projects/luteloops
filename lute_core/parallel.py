@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
+import subprocess
 
 from . import processes
 from .domain import LoopSpec
@@ -78,15 +80,31 @@ def spawn_child(runner, child: LoopSpec, worktree: str, slot: int):
     return proc
 
 
+def stop_children(procs) -> None:
+    """Tear down child runners we own. We hold their handles, so we ask each to
+    stop (it reaps its own agent), then reap it ourselves — concurrently, and
+    with no zombie left behind. A child that won't exit in time is forced."""
+    for _, proc in procs:
+        try:
+            proc.send_signal(signal.SIGINT)
+        except (OSError, ProcessLookupError):
+            pass
+    for _, proc in procs:
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            processes.stop_group(proc.pid)
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+
+
 def join_children(procs):
     try:
         return [(child, proc.wait()) for child, proc in procs]
     except BaseException:
-        for _, proc in procs:
-            try:
-                os.killpg(proc.pid, 9)
-            except Exception:
-                pass
+        stop_children(procs)
         raise
 
 
@@ -139,7 +157,7 @@ def run_parallel(runner, parent: LoopSpec, agents_by_loop: dict[str, str | None]
     pending = [
         (index, child)
         for index, child in enumerate(parent.children, 1)
-        if child.children or child.gate or runner.checks.run(child, lenient=True).verdict.value != "pass"
+        if child.children or child.gate or runner.checks.run(child).verdict.value != "pass"
     ]
     if pending:
         pending_children = [child for _, child in pending]

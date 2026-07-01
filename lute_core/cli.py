@@ -12,7 +12,7 @@ import shutil
 import sys
 from importlib import resources
 
-from . import cli_args, processes, schema
+from . import cli_args, judge, processes, schema
 from .cards import summarize_card
 from .cage import looks_like_container_runtime
 from .checks import CheckRunner
@@ -50,6 +50,7 @@ usage:
   lute status [file]           may execute checks for loops without unanswered cards
   lute inbox                   list what's waiting on you (blocked/gated cards)
   lute answer <loop> "text"    reply to an escalation card in INBOX/
+  lute judge -- "<rubric>"     grade HEAD's diff with the configured judge (the oracle behind done_when: "judge: ...")
   lute quarantine [list]       inspect quarantined trusted-exam edits
   lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
@@ -275,6 +276,39 @@ def is_placeholder_check(command: str) -> bool:
     return parts in (["true"], [":"], ["exit", "0"])
 
 
+def circular_exam_target(command: str) -> str | None:
+    """The repo file a done_when merely probes for existence or text, when the
+    whole check is that probe — the classic circular exam an agent satisfies by
+    simply writing the file. Deliberately narrow: it flags only the common bare
+    shapes (`test -f X`, `[ -f X ]`, non-recursive `grep PAT FILE`) and stays a
+    warning, so an author set on a tautology can still write one — the point is to
+    catch the insidious accident, not to wall off every evasion. Returns the path
+    normalized like a `protected:` glob (so the "protect it" advice actually
+    silences it), or None for real logic or a path outside the repo the agent
+    cannot write anyway."""
+    try:
+        parts = shlex.split(command.strip())
+    except ValueError:
+        return None
+    file_tests = {"-f", "-e", "-s", "-r", "-d"}
+    probe: str | None = None
+    if len(parts) == 3 and parts[0] == "test" and parts[1] in file_tests:
+        probe = parts[2]
+    elif len(parts) == 4 and parts[0] == "[" and parts[1] in file_tests and parts[-1] == "]":
+        probe = parts[2]
+    elif parts and parts[0] == "grep":
+        flags = [p for p in parts[1:] if p.startswith("-")]
+        recursive = any(
+            f in ("--recursive", "--dereference-recursive")
+            or (not f.startswith("--") and ("r" in f or "R" in f))  # a short -r/-R bundle
+            for f in flags
+        )  # a recursive grep searches a tree, not a single writable file
+        operands = [p for p in parts[1:] if not p.startswith("-")]
+        if not recursive and len(operands) == 2 and not operands[1].endswith("/"):
+            probe = operands[1]  # grep PATTERN FILE — a single writable file
+    return repo_rel(probe) if probe else None
+
+
 def cmd_run(args: list[str]) -> int:
     pos, opts = parse(args, {"--agent", "--file"}, {"--plain", "--bg", "--dry-run", "--skip-if-running"})
     need_pos(pos, "usage: lute run [root-id]", 0, 1)
@@ -443,6 +477,12 @@ def cmd_lint(args: list[str]) -> int:
                 warnings.append(f"{loop.id}: done_when looks like a placeholder; use an exam that measures the goal")
                 if loop.parallel and loop.children:
                     warnings.append(f"{loop.id}: parallel parent needs a real integration done_when for the merged children")
+            probe = circular_exam_target(loop.done_when.command)
+            if probe and loop.task is not None and not protected_covers(probe, list(loop.protected)):
+                warnings.append(
+                    f"{loop.id}: done_when only checks that {probe} exists — an agent can satisfy that by "
+                    f"writing it (a circular exam). Measure behavior, or list {probe!r} under protected: as ground truth."
+                )
             if loop.done_when.command.startswith("judge:"):
                 if not judge_cmd:
                     errors.append(f"{loop.id}: judge: check but no judge configured in {ctx.paths.config}")
@@ -459,7 +499,7 @@ def cmd_lint(args: list[str]) -> int:
                         errors.append(f"{loop.id}: judge: check but no resolvable judge in {ctx.paths.config}")
                         cls = "error"
                     else:
-                        cls = runner.checks.run(loop, lenient=True).verdict.value
+                        cls = runner.checks.run(loop).verdict.value
             else:
                 cls = runner.checks.run(loop, classify=True).verdict.value
                 if cls == "error":
@@ -636,42 +676,13 @@ def cmd_watch(args: list[str]) -> int:
     return 0
 
 
-def agent_pid_path(ctx: AppContext, runner_pid: int | None) -> str | None:
-    if not runner_pid:
-        return None
-    return os.path.join(ctx.paths.state, "agents", f"{runner_pid}.pid")
-
-
-def stop_recorded_agent(ctx: AppContext, runner_pid: int | None) -> bool:
-    path = agent_pid_path(ctx, runner_pid)
-    if not path:
-        return False
-    try:
-        agent_pid = int(open(path, encoding="utf-8").read().strip())
-    except (OSError, ValueError):
-        return False
-    return processes.stop_group(agent_pid)
-
-
-def stop_parallel_child_runs(ctx: AppContext, entry: str) -> int:
-    children = 0
-    if not os.path.isdir(ctx.paths.worktrees):
-        return 0
-    for name in sorted(os.listdir(ctx.paths.worktrees)):
-        if not name.endswith(".pid"):
-            continue
-        try:
-            with open(os.path.join(ctx.paths.worktrees, name), encoding="utf-8") as f:
-                pid_text, marker = (f.read().split("\n", 1) + [""])[:2]
-            child_pid = int(pid_text)
-        except (OSError, ValueError):
-            continue
-        marker = marker.strip()
-        if processes.command_contains(child_pid, entry) or (marker and processes.command_contains(child_pid, marker)):
-            stop_recorded_agent(ctx, child_pid)
-            processes.stop_group(child_pid)
-            children += 1
-    return children
+def cmd_judge(args: list[str]) -> int:
+    pos, _ = parse(args, set())
+    rubric = " ".join(pos).strip()
+    if not rubric:
+        raise UsageError('usage: lute judge -- "<rubric>"   (usually written as done_when: "judge: <rubric>")')
+    ctx, git, store, runner = make_runtime()
+    return judge.grade(rubric, ctx, git, runner.agents.cage_wrap)
 
 
 def cmd_stop(args: list[str]) -> int:
@@ -689,28 +700,24 @@ def cmd_stop(args: list[str]) -> int:
         info = {}
     pid = info.get("pid")
     entry = entrypoint_path()
+    # Identify the runner from the lock (host-derived, so we never signal the
+    # wrong repo's run or a reused pid); then let it tear down what it owns.
     serves = processes.serves_repo(pid, git.root) if processes.command_contains(pid, entry) else False
     if serves is False:
         store.remove_runner_file(lock)
         print(f"no active run here; cleared a stale lock (pid {pid})")
         return 0
     if serves is None:
-        children = stop_parallel_child_runs(ctx, entry)
-        tail = f" Stopped {children} identifiable parallel child group(s)." if children else ""
         print(
             f"could not confirm pid {pid}'s working directory; lock preserved. "
-            f"{tail} If it is this repo's run, try: kill {pid}",
+            f"If it is this repo's run, try: kill -INT {pid}",
             file=sys.stderr,
         )
         return 1
-    children = stop_parallel_child_runs(ctx, entry)
-    stop_recorded_agent(ctx, pid)
-    gone = processes.stop_group(pid)
-    tail = f" + {children} parallel child group(s)" if children else ""
-    if gone:
-        print(f"stopped run pid {pid}{tail}; a half-done iteration is dropped on the next run (state is git-derived)")
+    if processes.stop_run(pid):
+        print(f"stopped run pid {pid}; a half-done iteration is dropped on the next run (state is git-derived)")
         return 0
-    print(f"could not confirm pid {pid} stopped{tail}; it may still be running; check with: kill -0 {pid}", file=sys.stderr)
+    print(f"could not confirm pid {pid} stopped; it may still be running; check with: kill -0 {pid}", file=sys.stderr)
     return 1
 
 
@@ -764,6 +771,7 @@ def main(argv=None) -> int:
         "once": cmd_once,
         "stop": cmd_stop,
         "land": cmd_land,
+        "judge": cmd_judge,
         "quarantine": cmd_quarantine,
     }
     if argv and argv[0] not in commands:
