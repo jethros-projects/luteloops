@@ -572,46 +572,69 @@ class CliAndProtectionTests(unittest.TestCase):
             finally:
                 os.chdir(old)
 
-    def test_submodule_under_protected_glob_is_a_boundary_not_tamper(self):
-        # A gitlink is a repository boundary, not content: a pristine submodule
-        # must not be reported changed (the digest mismatch used to quarantine
-        # and rmtree it on every check), while replacing the submodule with
-        # plain agent-authored content must still be caught.
-        def git(*args, cwd):
-            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
-                            "-c", "protocol.file.allow=always", *args], cwd=cwd, check=True, capture_output=True)
+    @staticmethod
+    def _git(*args, cwd):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "-c", "protocol.file.allow=always", *args], cwd=cwd, check=True, capture_output=True)
 
+    def _superproject(self, td, mount):
+        dep = os.path.join(td, "dep")
+        os.makedirs(dep)
+        self._git("init", "-q", "-b", "main", cwd=dep)
+        Path(dep, "grader.sh").write_text("#!/bin/sh\ngrep -q 42 answer\n")
+        Path(dep, "answer").write_text("0\n")
+        self._git("add", "-A", cwd=dep)
+        self._git("commit", "-qm", "dep", cwd=dep)
+        sup = os.path.join(td, "sup")
+        os.makedirs(sup)
+        self._git("init", "-q", "-b", "main", cwd=sup)
+        self._git("submodule", "add", "-q", os.path.abspath(dep), mount, cwd=sup)
+        if mount != "exam":  # a protected sibling of the deep mount; none fits at the root mount
+            Path(sup, "exam", "spec.txt").write_text("spec\n")
+        self._git("add", "-A", cwd=sup)
+        self._git("commit", "-qm", "base", cwd=sup)
+        return sup
+
+    def _protection_for(self, sup, globs):
+        repo = GitRepo(os.path.realpath(sup))
+        ctx = AppContext(repo.root, Paths.for_repo(repo.root), {}, "", "r", RunMode.FILE)
+        ctx.trusted_base = repo.head()
+        prot = protection.Protection(ctx, repo)
+        loop = LoopSpec.from_normalized({"id": "r", "done_when": "true", "budget": [], "protected": globs})
+        return prot, prot.baseline(loop)
+
+    def test_pristine_submodule_is_a_boundary_not_tamper(self):
+        # A pristine submodule (deep OR root-mounted under the glob) is a
+        # repository boundary, not content: it must not be reported changed
+        # (the digest mismatch used to quarantine and rmtree it every check).
+        for mount, globs in (("exam/dep", ["exam/**"]), ("exam", ["exam/**"])):
+            with tempfile.TemporaryDirectory() as td:
+                sup = self._superproject(td, mount)
+                old = os.getcwd()
+                try:
+                    os.chdir(sup)
+                    prot, baseline = self._protection_for(sup, globs)
+                    self.assertEqual(prot.changed_paths(baseline), [], f"mount={mount}")
+                finally:
+                    os.chdir(old)
+
+    def test_forged_content_behind_a_submodule_boundary_is_caught(self):
+        # The boundary must stay fail-CLOSED: replacing the submodule with a
+        # plain directory of agent-authored content (the classic buy-a-pass when
+        # done_when reads inside it) is a change, restored before the check.
         with tempfile.TemporaryDirectory() as td:
-            dep = os.path.join(td, "dep")
-            os.makedirs(dep)
-            git("init", "-q", "-b", "main", cwd=dep)
-            Path(dep, "lib.txt").write_text("lib\n")
-            git("add", "-A", cwd=dep)
-            git("commit", "-qm", "dep", cwd=dep)
-
-            sup = os.path.join(td, "sup")
-            os.makedirs(os.path.join(sup, "exam"))
-            git("init", "-q", "-b", "main", cwd=sup)
-            Path(sup, "exam", "q.txt").write_text("q\n")
-            git("add", "-A", cwd=sup)
-            git("submodule", "add", "-q", os.path.abspath(dep), "exam/dep", cwd=sup)
-            git("commit", "-qm", "base", cwd=sup)
-
+            sup = self._superproject(td, "exam/dep")
             old = os.getcwd()
             try:
                 os.chdir(sup)
-                repo = GitRepo(os.path.realpath(sup))
-                ctx = AppContext(repo.root, Paths.for_repo(repo.root), {}, "", "r", RunMode.FILE)
-                ctx.trusted_base = repo.head()
-                prot = protection.Protection(ctx, repo)
-                loop = LoopSpec.from_normalized({"id": "r", "done_when": "true", "budget": [], "protected": ["exam/**"]})
-                baseline = prot.baseline(loop)
-
-                self.assertEqual(prot.changed_paths(baseline), [])
-
+                prot, baseline = self._protection_for(sup, ["exam/**"])
                 shutil.rmtree("exam/dep")
-                Path("exam/dep").write_text("agent-authored\n")
+                os.makedirs("exam/dep")
+                Path("exam/dep/grader.sh").write_text("#!/bin/sh\nexit 0\n")
+                Path("exam/dep/answer").write_text("42\n")
                 self.assertIn("exam/dep", prot.changed_paths(baseline))
+                prot.enforce("r", "run1", baseline)
+                self.assertFalse(os.path.exists("exam/dep/grader.sh"), "forged content survived restore")
             finally:
                 os.chdir(old)
 

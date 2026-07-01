@@ -85,6 +85,13 @@ as an engineering note; here they are the user-facing contract.
 - **`setsid()` daemonization.** An uncaged agent is host code and can deliberately
   daemonize out of Lute's process group. No host-side runner logic contains that;
   a real cage does.
+- **Exam material inside a submodule.** A `git submodule` under a `protected:` glob
+  is policed as a boundary: quarantine flags it (and restores the pinned mount) when
+  it is deleted, replaced with plain files, or moved to a different commit. What it
+  cannot police is a *dirty working tree of a checkout still at the recorded commit* —
+  an untracked file the agent adds inside a genuine submodule is that other
+  repository's business, not a superproject blob. A `done_when` that reads such a file
+  is trusting content Lute does not pin; keep exam material in the superproject.
 - **Cost / token limits.** Budget is bounded by `runs` and `secs` proxies only. A
   real spend cap belongs to an agent-reported hook, never to the runner guessing
   at dollars.
