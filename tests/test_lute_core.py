@@ -312,6 +312,40 @@ class ReapOrphanTests(unittest.TestCase):
             stop_group.assert_not_called()
 
 
+class SpawnWindowTests(unittest.TestCase):
+    def test_spawned_child_is_reaped_when_registration_work_fails(self):
+        # The instant a detached child exists it must be owned (in procs, where
+        # the teardown path can reach it); a failure writing its pid file must
+        # not leak a fully detached orphan.
+        runner = mock.Mock()
+        runner.ctx.paths.worktrees = tempfile.mkdtemp()
+        runner.ctx.paths.state = "/tmp/lute-test-state"
+        runner.ctx.paths.runner_log = "/tmp/lute-test-runner.log"
+        runner.ctx.root_id = "root"
+        runner.ctx.trusted_base = "trusted"
+        runner.ctx.manifest_path = "lute.yaml"
+        runner.checks.run.return_value.verdict.value = "fail"
+        runner.store.read_text.side_effect = OSError            # no pid files to reap
+        runner.store.safe_write_regular.side_effect = OSError("disk full")
+        child = mock.Mock()
+        child.id = "kid"
+        child.children = []
+        child.gate = None
+        parent = mock.Mock()
+        parent.children = [child]
+        proc = subprocess.Popen(["sleep", "300"])
+        try:
+            with mock.patch.object(parallel.processes, "spawn_detached", return_value=proc):
+                with self.assertRaises(OSError):
+                    parallel.run_parallel(runner, parent, {})
+            proc.wait(timeout=10)  # reaped by stop_children; a leak would still be sleeping
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        self.assertIsNotNone(proc.returncode)
+
+
 class CardAndEventTests(unittest.TestCase):
     def test_card_summary_and_event_replay_ignore_bad_lines(self):
         ready = cards.summarize_card("ship", "READY: ok\nANSWER: yes\n")
