@@ -276,6 +276,28 @@ def is_placeholder_check(command: str) -> bool:
     return parts in (["true"], [":"], ["exit", "0"])
 
 
+def circular_exam_target(command: str) -> str | None:
+    """The file a done_when merely probes for existence or text, when the whole
+    check is that probe — the classic circular exam an agent satisfies by simply
+    writing the file. Returns None for anything with real logic."""
+    try:
+        parts = shlex.split(command.strip())
+    except ValueError:
+        return None
+    file_tests = {"-f", "-e", "-s", "-r", "-d"}
+    if len(parts) == 3 and parts[0] == "test" and parts[1] in file_tests:
+        return parts[2]
+    if len(parts) == 4 and parts[0] == "[" and parts[1] in file_tests and parts[-1] == "]":
+        return parts[2]
+    if parts and parts[0] == "grep":
+        if any(p.startswith("-") and ("r" in p.lstrip("-") or "R" in p.lstrip("-")) for p in parts[1:]):
+            return None  # a recursive grep searches a tree, not a single writable file
+        operands = [p for p in parts[1:] if not p.startswith("-")]
+        if len(operands) == 2 and not operands[1].endswith("/"):  # grep PATTERN FILE
+            return operands[1]
+    return None
+
+
 def cmd_run(args: list[str]) -> int:
     pos, opts = parse(args, {"--agent", "--file"}, {"--plain", "--bg", "--dry-run", "--skip-if-running"})
     need_pos(pos, "usage: lute run [root-id]", 0, 1)
@@ -444,6 +466,12 @@ def cmd_lint(args: list[str]) -> int:
                 warnings.append(f"{loop.id}: done_when looks like a placeholder; use an exam that measures the goal")
                 if loop.parallel and loop.children:
                     warnings.append(f"{loop.id}: parallel parent needs a real integration done_when for the merged children")
+            probe = circular_exam_target(loop.done_when.command)
+            if probe and loop.task is not None and not protected_covers(probe, list(loop.protected)):
+                warnings.append(
+                    f"{loop.id}: done_when only checks that {probe} exists — an agent can satisfy that by "
+                    f"writing it (a circular exam). Measure behavior, or list {probe!r} under protected: as ground truth."
+                )
             if loop.done_when.command.startswith("judge:"):
                 if not judge_cmd:
                     errors.append(f"{loop.id}: judge: check but no judge configured in {ctx.paths.config}")
