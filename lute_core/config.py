@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import stat
+import tempfile
 from dataclasses import dataclass
 from typing import Any
 
@@ -59,30 +61,36 @@ class AnswerAuthority:
                 pass
             ident = os.path.realpath(self.ctx.shared_root)
             path = os.path.join(directory, hashlib.sha256(ident.encode()).hexdigest()[:16] + ".key")
-            try:
-                st = os.lstat(path)
-            except FileNotFoundError:
-                st = None
-            if st is not None and (stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode)):
-                raise PreconditionError(f"{path} must be a regular key file")
-            if st is None:
+            if not os.path.lexists(path):
+                # Publish by hard link, not replace: the link is atomic (no reader
+                # ever sees a partial key) and exclusive (the first creator wins,
+                # so every process converges on one key and cached copies never
+                # diverge from the file).
+                fd, tmp = tempfile.mkstemp(dir=directory)
                 try:
-                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    os.write(fd, os.urandom(16).hex().encode())
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                try:
+                    os.link(tmp, path)
                 except FileExistsError:
                     pass
-                else:
-                    try:
-                        os.write(fd, os.urandom(16).hex().encode())
-                    finally:
-                        os.close(fd)
+                finally:
+                    os.remove(tmp)
             try:
-                st = os.lstat(path)
-            except FileNotFoundError as exc:
-                raise PreconditionError(f"could not create answer-auth key at {path}") from exc
-            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-                raise PreconditionError(f"{path} must be a regular key file")
-            with open(path, encoding="utf-8") as f:
-                self._key = f.read().strip()
+                fd = os.open(path, os.O_RDONLY | (getattr(os, "O_NOFOLLOW", 0)))
+            except OSError as exc:
+                raise PreconditionError(f"{path} must be a regular key file") from exc
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise PreconditionError(f"{path} must be a regular key file")
+                key = os.read(fd, 64).decode("ascii", "replace").strip()
+            finally:
+                os.close(fd)
+            if not re.fullmatch(r"[0-9a-f]{32}", key):
+                raise PreconditionError(f"answer-auth key at {path} is malformed; delete it to regenerate")
+            self._key = key
         return self._key
 
     def token(self, loop_id: str, basis: str) -> str:

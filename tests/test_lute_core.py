@@ -1,6 +1,8 @@
+import hashlib
 import json
 import os
 import random
+import stat as stat_module
 import subprocess
 import tempfile
 import unittest
@@ -12,7 +14,7 @@ from unittest import mock
 from lute_core import cards, cli, cli_args, events, formatting, ledger, parallel, planner, processes, protection, schema
 from lute_core.cage import DEFAULT_CAGE_TEMPLATE, CageTemplate, expand_cage_template
 from lute_core.checks import CheckRunner
-from lute_core.config import freeze_config, load_config
+from lute_core.config import AnswerAuthority, freeze_config, load_config
 from lute_core.context import AppContext, Paths
 from lute_core.domain import LoopSpec, RunMode
 from lute_core.errors import Gated, PreconditionError
@@ -134,6 +136,35 @@ class ConfigTests(unittest.TestCase):
 
             with self.assertRaisesRegex(PreconditionError, "regular file"):
                 load_config(str(link))
+
+    def _authority(self, repo_root):
+        paths = Paths.for_repo(repo_root)
+        return AnswerAuthority(AppContext(repo_root, paths, {}, "", "k", RunMode.FILE))
+
+    def _key_path(self, repo_root, keys_dir):
+        ident = os.path.realpath(repo_root)
+        return os.path.join(keys_dir, hashlib.sha256(ident.encode()).hexdigest()[:16] + ".key")
+
+    def test_key_creation_is_atomic_valid_and_stable(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as keys:
+            with mock.patch.dict(os.environ, {"LUTE_KEY_DIR": keys}):
+                key = self._authority(td).key()
+                self.assertRegex(key, r"\A[0-9a-f]{32}\Z")
+                self.assertEqual(os.listdir(keys), [os.path.basename(self._key_path(td, keys))])
+                mode = stat_module.S_IMODE(os.lstat(self._key_path(td, keys)).st_mode)
+                self.assertEqual(mode, 0o600)
+                # a second authority converges on the same key, never regenerates
+                self.assertEqual(self._authority(td).key(), key)
+
+    def test_partially_written_key_is_rejected_not_trusted(self):
+        # A crash between create and write used to leave an empty key file that
+        # every later run silently trusted ('' forever) - a forgeable authority.
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as keys:
+            with mock.patch.dict(os.environ, {"LUTE_KEY_DIR": keys}):
+                for corrupt in (b"", b"deadbeef", b"Z" * 32):
+                    Path(self._key_path(td, keys)).write_bytes(corrupt)
+                    with self.assertRaisesRegex(PreconditionError, "delete it to regenerate"):
+                        self._authority(td).key()
 
     def test_parallel_child_freezes_parent_state_config_from_trusted_base(self):
         with tempfile.TemporaryDirectory() as td:
