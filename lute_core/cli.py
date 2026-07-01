@@ -277,25 +277,36 @@ def is_placeholder_check(command: str) -> bool:
 
 
 def circular_exam_target(command: str) -> str | None:
-    """The file a done_when merely probes for existence or text, when the whole
-    check is that probe — the classic circular exam an agent satisfies by simply
-    writing the file. Returns None for anything with real logic."""
+    """The repo file a done_when merely probes for existence or text, when the
+    whole check is that probe — the classic circular exam an agent satisfies by
+    simply writing the file. Deliberately narrow: it flags only the common bare
+    shapes (`test -f X`, `[ -f X ]`, non-recursive `grep PAT FILE`) and stays a
+    warning, so an author set on a tautology can still write one — the point is to
+    catch the insidious accident, not to wall off every evasion. Returns the path
+    normalized like a `protected:` glob (so the "protect it" advice actually
+    silences it), or None for real logic or a path outside the repo the agent
+    cannot write anyway."""
     try:
         parts = shlex.split(command.strip())
     except ValueError:
         return None
     file_tests = {"-f", "-e", "-s", "-r", "-d"}
+    probe: str | None = None
     if len(parts) == 3 and parts[0] == "test" and parts[1] in file_tests:
-        return parts[2]
-    if len(parts) == 4 and parts[0] == "[" and parts[1] in file_tests and parts[-1] == "]":
-        return parts[2]
-    if parts and parts[0] == "grep":
-        if any(p.startswith("-") and ("r" in p.lstrip("-") or "R" in p.lstrip("-")) for p in parts[1:]):
-            return None  # a recursive grep searches a tree, not a single writable file
+        probe = parts[2]
+    elif len(parts) == 4 and parts[0] == "[" and parts[1] in file_tests and parts[-1] == "]":
+        probe = parts[2]
+    elif parts and parts[0] == "grep":
+        flags = [p for p in parts[1:] if p.startswith("-")]
+        recursive = any(
+            f in ("--recursive", "--dereference-recursive")
+            or (not f.startswith("--") and ("r" in f or "R" in f))  # a short -r/-R bundle
+            for f in flags
+        )  # a recursive grep searches a tree, not a single writable file
         operands = [p for p in parts[1:] if not p.startswith("-")]
-        if len(operands) == 2 and not operands[1].endswith("/"):  # grep PATTERN FILE
-            return operands[1]
-    return None
+        if not recursive and len(operands) == 2 and not operands[1].endswith("/"):
+            probe = operands[1]  # grep PATTERN FILE — a single writable file
+    return repo_rel(probe) if probe else None
 
 
 def cmd_run(args: list[str]) -> int:
