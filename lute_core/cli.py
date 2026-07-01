@@ -12,7 +12,7 @@ import shutil
 import sys
 from importlib import resources
 
-from . import cli_args, processes, schema
+from . import cli_args, judge, processes, schema
 from .cards import summarize_card
 from .cage import looks_like_container_runtime
 from .checks import CheckRunner
@@ -50,6 +50,7 @@ usage:
   lute status [file]           may execute checks for loops without unanswered cards
   lute inbox                   list what's waiting on you (blocked/gated cards)
   lute answer <loop> "text"    reply to an escalation card in INBOX/
+  lute judge -- "<rubric>"     grade HEAD's diff with the configured judge (the oracle behind done_when: "judge: ...")
   lute quarantine [list]       inspect quarantined trusted-exam edits
   lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
@@ -459,7 +460,7 @@ def cmd_lint(args: list[str]) -> int:
                         errors.append(f"{loop.id}: judge: check but no resolvable judge in {ctx.paths.config}")
                         cls = "error"
                     else:
-                        cls = runner.checks.run(loop, lenient=True).verdict.value
+                        cls = runner.checks.run(loop).verdict.value
             else:
                 cls = runner.checks.run(loop, classify=True).verdict.value
                 if cls == "error":
@@ -636,6 +637,15 @@ def cmd_watch(args: list[str]) -> int:
     return 0
 
 
+def cmd_judge(args: list[str]) -> int:
+    pos, _ = parse(args, set())
+    rubric = " ".join(pos).strip()
+    if not rubric:
+        raise UsageError('usage: lute judge -- "<rubric>"   (usually written as done_when: "judge: <rubric>")')
+    ctx, git, store, runner = make_runtime()
+    return judge.grade(rubric, ctx, git, runner.agents.cage_wrap)
+
+
 def cmd_stop(args: list[str]) -> int:
     pos, _ = parse(args, set())
     need_pos(pos, "usage: lute stop", 0, 0)
@@ -722,6 +732,7 @@ def main(argv=None) -> int:
         "once": cmd_once,
         "stop": cmd_stop,
         "land": cmd_land,
+        "judge": cmd_judge,
         "quarantine": cmd_quarantine,
     }
     if argv and argv[0] not in commands:
