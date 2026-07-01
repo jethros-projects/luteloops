@@ -12,11 +12,8 @@ import json
 import os
 import stat
 import tempfile
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
-
-import fcntl
 
 from .context import Paths
 
@@ -43,26 +40,6 @@ class StateStore:
         self.ensure_parent(self.paths.events)
         self.ensure_parent(self.paths.config)
         self.ensure_parent(self.paths.lock)
-
-    @contextmanager
-    def locked(self):
-        self.ensure_dir(self.paths.state)
-        path = os.path.join(self.paths.state, "state.lock")
-        self.ensure_regular_file(path)
-        flags = os.O_RDWR | os.O_CREAT
-        if O_NOFOLLOW:
-            flags |= O_NOFOLLOW
-        try:
-            fd = os.open(path, flags, 0o644)
-        except OSError:
-            self.replace_non_regular_file(path)
-            fd = os.open(path, flags, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
 
     def ensure_dir(self, path: str) -> None:
         if os.path.lexists(path):
@@ -204,16 +181,21 @@ class StateStore:
         except OSError:
             return None
 
+    # The two capture-control files: .gitignore keeps runner artifacts out of run
+    # commits; .gitattributes makes sibling branches' ledger appends union-merge
+    # instead of conflicting (each parallel child commits its own ledger lines).
+    CAPTURE_CONTROL = (
+        (".gitignore", ("logs/", "events.jsonl", "wt/", "quarantine/", "lock*")),
+        (".gitattributes", ("ledger.jsonl merge=union",)),
+    )
+
     def ensure_capture_ignore(self) -> None:
-        ignore = os.path.join(self.paths.state, ".gitignore")
-        need = ("logs/", "events.jsonl", "wt/", "quarantine/", "lock*")
-        have = []
-        if self.is_regular_file(ignore):
-            with open(ignore, encoding="utf-8") as f:
-                have = f.read().splitlines()
-        missing = [entry for entry in need if entry not in have]
-        if missing:
-            self.safe_write_regular(ignore, "\n".join([*have, *missing]) + "\n")
+        for name, need in self.CAPTURE_CONTROL:
+            path = os.path.join(self.paths.state, name)
+            have = self.read_text(path).splitlines()
+            missing = [entry for entry in need if entry not in have]
+            if missing:
+                self.safe_write_regular(path, "\n".join([*have, *missing]) + "\n")
 
     def _remove_path(self, path: str) -> None:
         if not os.path.lexists(path):

@@ -104,10 +104,13 @@ class CardService:
             return None
         nonce = basis
         self.ledger_append({"ts": now_iso(), "loop": lid, "event": "answer", "n": nonce, "auth": self.authority.token(lid, nonce)})
-        self.git.shared_text(self.ctx.shared_root, "add", "--", self.ctx.paths.ledger)
+        # The ledger line commits to THIS branch (a child commits to its own
+        # worktree branch); the card lives in the shared INBOX and clears there.
+        self.git.text("add", "--", self.ctx.paths.ledger)
+        self.git.commit(f"lute({lid}): answer consumed", allow_empty=True)
         if self.git.ok("ls-files", "--error-unmatch", "--", path, cwd=self.ctx.shared_root):
             self.git.shared_text(self.ctx.shared_root, "add", "-A", "--", path)
-        self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): answer consumed")
+            self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): card cleared")
         return answer
 
     def answer_card(self, loop_id: str, text: str) -> str | None:

@@ -4032,8 +4032,48 @@ CRON
   [ ! -f "$cf" ] || ! grep -q 'BEGIN lute' "$cf" || die "47t) cron wrote a managed block for a newline-bearing schedule"
 }
 
+# ---------------------------------------------------------------- T48
+t_t48() { # per-branch ledger: run accounting lives with the branch that earned it -
+          # children commit their own lines, merged like work; no shared flock artifact
+  # --- a) a parallel child's ledger lines are committed on ITS branch (durable accounting)
+  mkrepo "$WORK/t48a"
+  cat > lute.yaml <<'EOF'
+loop: par
+done_when: "test -f a.txt && test -f never"
+parallel: true
+budget: 5 runs
+loops:
+  - loop: kid-a
+    agent: "touch a.txt"
+    task: t
+    done_when: "test -f a.txt"
+    budget: 2 runs
+  - loop: kid-stuck
+    agent: "true"
+    task: t
+    done_when: "false"
+    budget: 1 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "48a) want exit 3 (stuck child escalates): $(cat out.log)"
+  git show lute/par__kid-stuck:.lute/ledger.jsonl 2>/dev/null | grep -q '"loop": "kid-stuck"' \
+    || die "48a) child branch does not carry its own ledger accounting"
+  [ ! -f .lute/state.lock ] || die "48a) shared flock artifact created during the run"
+
+  # --- b) no runner lock artifact is ever committed into a target repo's history
+  mkrepo "$WORK/t48b"
+  printf 'loop: plain\nagent: "touch done.txt"\ntask: t\ndone_when: "test -f done.txt"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "48b) run exited $rc: $(cat out.log)"
+  if git log --all --name-only --format= | grep -q 'state.lock'; then
+    die "48b) a flock artifact was committed into the target repo's history"
+  fi
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4083,6 +4123,7 @@ desc() {
     t45) echo "plan-dag       lute plan --dag reasons from dependencies but emits native lute.proposed.yaml; --keep-dag preserves the review artifact" ;;
     t46) echo "stated-contracts THREAT_MODEL.md states the two trust bases + named out-of-scope boundaries (README-linked); INVARIANT.md states 'the builder cannot author its own verdict' and maps each clause to a real notch (runner-linked)" ;;
     t47) echo "host-boundary  runner state, Git, answer, plan, judge, worktree, manifest, and config hardening" ;;
+    t48) echo "ledger-locality run accounting is committed per branch (children own their ledger, merged like work); no flock artifact created or committed" ;;
   esac
 }
 
