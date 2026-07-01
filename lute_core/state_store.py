@@ -12,8 +12,11 @@ import json
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
+
+import fcntl
 
 from .context import Paths
 
@@ -41,6 +44,26 @@ class StateStore:
         self.ensure_parent(self.paths.config)
         self.ensure_parent(self.paths.lock)
 
+    @contextmanager
+    def locked(self):
+        self.ensure_dir(self.paths.state)
+        path = os.path.join(self.paths.state, "state.lock")
+        self.ensure_regular_file(path)
+        flags = os.O_RDWR | os.O_CREAT
+        if O_NOFOLLOW:
+            flags |= O_NOFOLLOW
+        try:
+            fd = os.open(path, flags, 0o644)
+        except OSError:
+            self.replace_non_regular_file(path)
+            fd = os.open(path, flags, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
     def ensure_dir(self, path: str) -> None:
         if os.path.lexists(path):
             try:
@@ -54,6 +77,17 @@ class StateStore:
 
     def ensure_parent(self, path: str) -> None:
         self.ensure_dir(os.path.dirname(path))
+
+    def child_path(self, base: str, *parts: str) -> str:
+        root = os.path.abspath(base)
+        path = os.path.abspath(os.path.join(root, *parts))
+        try:
+            inside = os.path.commonpath([root, path]) == root
+        except ValueError:
+            inside = False
+        if not inside:
+            raise ValueError(f"path escapes {base}: {os.path.join(*parts)}")
+        return path
 
     def snapshot(self, path: str) -> FileSnapshot:
         if not self.is_regular_file(path):
@@ -81,6 +115,8 @@ class StateStore:
                 f.write(payload)
                 f.flush()
                 os.fsync(f.fileno())
+            if os.path.lexists(path) and not self.is_regular_file(path):
+                self.remove_runner_file(path)
             os.replace(tmp, path)
         finally:
             try:
@@ -107,6 +143,15 @@ class StateStore:
         finally:
             os.close(fd)
 
+    def read_text(self, path: str, default: str = "") -> str:
+        if not self.is_regular_file(path):
+            return default
+        try:
+            with open(path, encoding="utf-8", errors="replace", newline="") as f:
+                return f.read()
+        except OSError:
+            return default
+
     def ensure_regular_file(self, path: str, default: bytes = b"") -> None:
         self.ensure_parent(path)
         if not os.path.lexists(path):
@@ -118,6 +163,8 @@ class StateStore:
     def replace_non_regular_file(self, path: str, default: bytes = b"") -> None:
         if os.path.lexists(path) and self.is_regular_file(path):
             return
+        if os.path.lexists(path):
+            self.remove_runner_file(path)
         self.safe_write_regular(path, default)
 
     def remove_runner_file(self, path: str) -> None:
@@ -140,6 +187,13 @@ class StateStore:
         except OSError:
             return False
         return stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode)
+
+    def is_dir(self, path: str) -> bool:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            return False
+        return stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode)
 
     def _read_regular_bytes(self, path: str) -> bytes | None:
         if not self.is_regular_file(path):
