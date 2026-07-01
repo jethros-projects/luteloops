@@ -32,7 +32,8 @@ always the pinned one, even across runs and even if the tamper was committed.
 
 *Enforced by:* **t37** (a tampered exam stays caught on re-run), **t38** (a
 committed grader/manifest/exam tamper can't buy a pass on a later run), and
-**t17** (a bought pass is voided by the protected guard under a cage).
+**t17** (a bought pass is voided by the protected guard — hermetically, no cage
+required; this is an uncaged guarantee).
 
 ## 3. The agent's exit code is logged, never branched on
 
