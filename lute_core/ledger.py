@@ -85,20 +85,10 @@ def trusted_duration(entry: dict[str, Any]) -> float:
         return 0.0
 
 
-def authenticated_answer_tokens(
-    entries: Iterable[dict[str, Any]], lid: str, answer_auth: AnswerAuth
-) -> set[str]:
-    return {
-        e["auth"]
-        for e in entries
-        if is_authenticated_answer(e, lid, answer_auth)
-    }
-
-
 def authenticated_answer_count(
     entries: Iterable[dict[str, Any]], lid: str, answer_auth: AnswerAuth
 ) -> int:
-    return len(authenticated_answer_tokens(entries, lid, answer_auth))
+    return len({e["auth"] for e in entries if is_authenticated_answer(e, lid, answer_auth)})
 
 
 def runs_since_authenticated_answer(
@@ -141,6 +131,18 @@ def budget_spent(
     git_runs: int,
     waited: float = 0.0,
 ) -> bool:
+    """Two trust models back the runs cap, and it takes the max of both.
+
+    The ledger view (`runs`) is precise — it resets at each authenticated
+    answer — but the file is agent-reachable, so alone it could be emptied.
+    The committed-history view (`git_runs`) cannot be un-written, but it never
+    resets, so each authenticated answer forgives one full cap from it
+    (`git_runs - cap * answers`). An agent that wipes the ledger falls to the
+    committed floor; a forged answer authenticates nothing and forgives
+    nothing. Seconds have no committed counterpart (commits carry no
+    durations), so the secs cap rests on the ledger view alone — tamper there
+    is bounded by the whole-file restore after every run, not by a floor.
+    """
     runs, secs = runs_since_authenticated_answer(entries, lid, answer_auth)
     answers = authenticated_answer_count(entries, lid, answer_auth)
     for kind, cap in budget:

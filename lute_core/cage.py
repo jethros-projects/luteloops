@@ -14,50 +14,13 @@ DEFAULT_CAGE_TEMPLATE = (
 )
 
 def looks_like_container_runtime(cage: Any) -> bool:
+    """Advisory only (it feeds one lint warning): a cage template that never
+    invokes a container runtime cannot keep the answer-auth key away from the
+    agent. A deliberate substring heuristic — any template can fool a string
+    check either way, so nothing is gated on it."""
     if cage == "docker":
         return True
-    if not isinstance(cage, str):
-        return False
-    return any(_command_invokes_container(command) for command in _simple_commands(cage))
-
-
-def _simple_commands(template: str) -> list[list[str]]:
-    try:
-        lexer = shlex.shlex(template, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        return []
-    commands, current = [], []
-    for token in tokens:
-        if token in {";", "&", "&&", "|", "||", "(", ")"}:
-            if current:
-                commands.append(current)
-                current = []
-        else:
-            current.append(token)
-    if current:
-        commands.append(current)
-    return commands
-
-
-def _command_invokes_container(command: list[str]) -> bool:
-    i = 0
-    while i < len(command) and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", command[i]):
-        i += 1
-    if i >= len(command):
-        return False
-    name = os.path.basename(command[i])
-    if name in {"env", "sudo", "command", "exec"}:
-        return _command_invokes_container(command[i + 1 :])
-    if name in {"sh", "bash", "dash", "zsh"}:
-        for j, token in enumerate(command[i + 1 :], i + 1):
-            if "c" in token.lstrip("-") and j + 1 < len(command):
-                return looks_like_container_runtime(command[j + 1])
-    return name in {"docker", "podman"} and (
-        (i + 1 < len(command) and command[i + 1] == "run")
-        or (i + 2 < len(command) and command[i + 1] == "container" and command[i + 2] == "run")
-    )
+    return isinstance(cage, str) and bool(re.search(r"\b(docker|podman)\b.*\brun\b", cage))
 
 
 @dataclass(frozen=True)

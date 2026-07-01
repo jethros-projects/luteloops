@@ -108,6 +108,12 @@ def _git_record_mode(mode: int, kind: str) -> int:
     return mode
 
 
+def _lstree_entry(meta_b: bytes) -> tuple[str, int, str]:
+    mode_s, git_type, object_id = meta_b.decode("ascii", "replace").split()[:3]
+    full_mode = int(mode_s, 8)
+    return _kind_from_mode(full_mode, git_type), full_mode, object_id
+
+
 @dataclass(frozen=True)
 class FileRecord:
     path: str
@@ -282,21 +288,14 @@ class Protection:
             path = os.fsdecode(path_b)
             if not path:
                 continue
-            meta = meta_b.decode("ascii", "replace")
-            mode_s, git_type, object_id = meta.split()[:3]
-            full_mode = int(mode_s, 8)
-            kind = _kind_from_mode(full_mode, git_type)
+            kind, full_mode, object_id = _lstree_entry(meta_b)
             # Committed symlinks the glob can reach below are watched too, so the
             # walk (which watches them live) and the baseline stay symmetric.
             watched = any(m.match(path) for m in matchers) or (
                 kind == "symlink" and any(reaches_below(g, path) for g in globs)
             )
-            if not watched:
-                continue
-            mode = _git_record_mode(full_mode, kind)
-            raw = self.git.object_bytes(object_id)
-            digest = object_id if raw is None else _sha(raw)
-            out.append((path, FileRecord(path, kind, mode, digest, "git", raw)))
+            if watched:
+                out.append((path, self._git_record(path, kind, full_mode, object_id)))
         return out
 
     def git_record_at(self, ref: str, path: str) -> FileRecord | None:
@@ -304,14 +303,12 @@ class Protection:
         if not raw_entry:
             return None
         meta_b, _, _ = raw_entry.partition(b"\t")
-        meta = meta_b.decode("ascii", "replace")
-        mode_s, git_type, object_id = meta.split()[:3]
-        full_mode = int(mode_s, 8)
-        kind = _kind_from_mode(full_mode, git_type)
-        mode = _git_record_mode(full_mode, kind)
+        return self._git_record(path, *_lstree_entry(meta_b))
+
+    def _git_record(self, path: str, kind: str, full_mode: int, object_id: str) -> FileRecord:
         raw = self.git.object_bytes(object_id)
         digest = object_id if raw is None else _sha(raw)
-        return FileRecord(path, kind, mode, digest, "git", raw)
+        return FileRecord(path, kind, _git_record_mode(full_mode, kind), digest, "git", raw)
 
     def changed_paths(self, baseline: ProtectionBaseline) -> list[str]:
         watched = set(baseline.records) | set(baseline.watched_absent) | set(baseline.control_paths)
