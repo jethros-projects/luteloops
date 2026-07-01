@@ -147,10 +147,7 @@ class GitRepo:
         return head
 
     def show_bytes(self, ref_path: str, cwd: str | None = None) -> bytes | None:
-        root = cwd or self.root
-        env = dict(os.environ)
-        env.pop("GIT_EXTERNAL_DIFF", None)
-        result = subprocess.run(["git", "-C", root, *self._safe_args(root), "show", ref_path], capture_output=True, env=env)
+        result = self.run("show", ref_path, cwd=cwd, check=False, text=False)
         return result.stdout if result.returncode == 0 else None
 
     def object_bytes(self, object_id: str, cwd: str | None = None) -> bytes | None:
