@@ -28,7 +28,12 @@ class Paths:
         logs = os.path.join(state, "logs")
         return cls(
             state=state,
-            ledger=os.path.join(state, "ledger.jsonl"),
+            # The ledger is accounting FOR a branch's work, so it lives in that
+            # branch's tree and is committed with it: each parallel child
+            # worktree writes its own copy, merged like any other work (a
+            # `merge=union` attribute keeps sibling appends from conflicting).
+            # Everything else is shared session state.
+            ledger=os.path.join(os.path.abspath(repo), ".lute", "ledger.jsonl"),
             journal=os.path.join(state, "journal"),
             config=os.path.join(state, "config.yaml"),
             events=os.path.join(state, "events.jsonl"),

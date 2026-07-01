@@ -29,7 +29,7 @@ from .errors import Blocked, Gated, PreconditionError, UsageError
 from .events import EventBus, now_iso
 from .formatting import human
 from .git_repo import GitRepo
-from .ledger import append_entry, is_authenticated_entry, read_entries, run_basis, snapshot, total_runs
+from .ledger import append_entry, read_entries, restore_if_changed, snapshot, total_runs
 from . import processes
 from .protection import Protection
 from .state_store import StateStore
@@ -268,44 +268,27 @@ class Runner:
             os.path.join(self.ctx.paths.logs, f"{loop_id}.run{run_number}.log"),
         )
         self.events.emit("agent_end", loop_id, run=run_number, exit=returncode, secs=duration)
-        with self.store.locked():
-            current_branch = self.git.current_branch()
-            if current_branch != expected_branch:
-                self.git.force_branch(expected_branch, pre_agent_head)
-                self.git.text("checkout", "-q", "-f", expected_branch)
-                self.restore_ledger_after_agent(trusted)
-                self.cards.escalate(
-                    loop,
-                    f"agent left branch {expected_branch} on {current_branch}; runner restored {expected_branch}",
-                )
-            self.git.rewind_commits_keep_worktree(pre_agent_head)
-            self.restore_ledger_after_agent(trusted)
-            self.enforce_quarantine(loop, f"run{run_number}", baseline)
-            entry = {"ts": now_iso(), "loop": loop_id, "run": run_number, "duration": duration, "exit": returncode}
-            entry["auth"] = self.authority.token(loop_id, run_basis(entry))
-            self.ledger_append(entry)
-            self.git.stage_run_work(self.ctx.run_pre_untracked, self.ctx.quarantined_paths)
-            self.git.commit(f"lute({loop_id}): run {run_number}", allow_empty=True)
+        current_branch = self.git.current_branch()
+        if current_branch != expected_branch:
+            self.git.force_branch(expected_branch, pre_agent_head)
+            self.git.text("checkout", "-q", "-f", expected_branch)
+            self.restore_ledger(trusted)
+            self.cards.escalate(
+                loop,
+                f"agent left branch {expected_branch} on {current_branch}; runner restored {expected_branch}",
+            )
+        self.git.rewind_commits_keep_worktree(pre_agent_head)
+        self.restore_ledger(trusted)
+        self.enforce_quarantine(loop, f"run{run_number}", baseline)
+        self.ledger_append({"ts": now_iso(), "loop": loop_id, "run": run_number, "duration": duration, "exit": returncode})
+        self.git.stage_run_work(self.ctx.run_pre_untracked, self.ctx.quarantined_paths)
+        self.git.commit(f"lute({loop_id}): run {run_number}", allow_empty=True)
 
-    def restore_ledger_after_agent(self, trusted) -> None:
-        current = snapshot(self.ctx.paths.ledger)
-        if current.raw == trusted.raw:
-            return
-        trusted_keys = {json.dumps(entry, sort_keys=True, separators=(",", ":")) for entry in trusted.entries}
-        preserved = [
-            entry for entry in current.entries
-            if json.dumps(entry, sort_keys=True, separators=(",", ":")) not in trusted_keys
-            and is_authenticated_entry(entry, self.authority.token)
-        ]
-        raw = trusted.raw or b""
-        if preserved:
-            if raw and not raw.endswith(b"\n"):
-                raw += b"\n"
-            raw += b"".join((json.dumps(entry) + "\n").encode() for entry in preserved)
-        if raw:
-            self.store.safe_write_regular(self.ctx.paths.ledger, raw)
-        else:
-            self.store.remove_runner_file(self.ctx.paths.ledger)
+    def restore_ledger(self, trusted) -> None:
+        # This runner is the ledger's only writer (each worktree owns its own
+        # file), so an on-disk difference from the pre-agent snapshot can only be
+        # agent tampering: revert the whole file.
+        restore_if_changed(self.ctx.paths.state, self.ctx.paths.ledger, trusted)
 
     def enforce_quarantine(self, loop: LoopSpec, run_id: str, baseline):
         result = self.protection.enforce(str(loop.id), run_id, baseline)
@@ -354,9 +337,10 @@ class Runner:
         self.git.checkout_or_create_branch(branch)
 
     def seal_ignore(self, root_id: str) -> None:
-        ignore = os.path.join(self.ctx.paths.state, ".gitignore")
-        if self.git.ok("ls-files", "--error-unmatch", "--", ignore) and not self.git.ok("diff", "--quiet", "--", ignore):
-            self.git.text("add", ignore)
+        control = [os.path.join(self.ctx.paths.state, name) for name, _ in StateStore.CAPTURE_CONTROL]
+        changed = [p for p in control if self.git.ok("ls-files", "--error-unmatch", "--", p) and not self.git.ok("diff", "--quiet", "--", p)]
+        if changed:
+            self.git.text("add", *changed)
             self.git.commit(f"lute({root_id}): capture")
 
     def run_origin(self, root_id: str) -> str | None:

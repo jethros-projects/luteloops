@@ -587,6 +587,9 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(paths.state, "/repo/main/.lute")
         self.assertEqual(paths.inbox, "/repo/main/INBOX")
         self.assertEqual(paths.worktrees, "/repo/main/.lute/wt")
+        # The ledger accounts for a branch's work, so it lives with that branch's
+        # tree: each parallel child worktree writes its own, merged like work.
+        self.assertEqual(paths.ledger, "/repo/worktree/.lute/ledger.jsonl")
 
     def test_state_store_recreates_deleted_logs(self):
         with tempfile.TemporaryDirectory() as td:
