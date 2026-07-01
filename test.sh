@@ -3621,8 +3621,30 @@ EOF
   grep -q -- '--keep-dag requires --dag' out.log || die "45c) error does not explain dependency: $(cat out.log)"
 }
 
+# ---------------------------------------------------------------- T46
+t_t46() { # trust-contract: THREAT_MODEL.md states the two trust bases and the out-of-scope boundaries, so the honesty is a contract that can't silently drift
+  TM="$ROOT/THREAT_MODEL.md"
+  [ -f "$TM" ] || die "46) THREAT_MODEL.md is missing; the trust model must be stated, not discovered"
+  # the load-bearing distinction: exam-pass integrity holds uncaged...
+  grep -Eqi 'exam-pass integrity' "$TM" || die "46) threat model does not name exam-pass integrity: $TM"
+  grep -Eqi 'uncaged' "$TM" || die "46) threat model does not distinguish the uncaged trust base"
+  # ...while budget reset and human approval are caged-only, anchored on the answer-auth key
+  grep -Eqi 'answer-auth key' "$TM" || die "46) threat model does not name the answer-auth key as the caged secret"
+  grep -Eqi 'gate: human' "$TM" || die "46) threat model does not state the gate: human cage requirement"
+  # the intent sentence: isolation is fs + host secrets, egress is the operator's to seal
+  grep -Eqi 'egress' "$TM" || die "46) threat model does not scope network egress"
+  grep -Eqi 'operator' "$TM" || die "46) threat model does not name the operator's egress responsibility"
+  # explicitly-named out-of-scope boundaries, not implied ones
+  grep -Eqi 'setsid|daemoniz' "$TM" || die "46) threat model omits the daemonization boundary"
+  grep -Eqi 'SIGKILL|orphan' "$TM" || die "46) threat model omits the container-orphan boundary"
+  grep -Eqi 'token|cost' "$TM" || die "46) threat model omits the cost/token out-of-scope note"
+  # discoverable, not orphaned: a reader is pointed to the contract from the README
+  grep -q 'THREAT_MODEL.md' "$ROOT/README.md" || die "46) README does not link THREAT_MODEL.md; an unlinked contract drifts"
+  true
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -3670,6 +3692,7 @@ desc() {
     t43) echo "uninstall      removes installer-owned tool artifacts while preserving project state" ;;
     t44) echo "quarantine     trusted exam/control edits are quarantined, inspectable, and excluded from run commits" ;;
     t45) echo "plan-dag       lute plan --dag reasons from dependencies but emits native lute.proposed.yaml; --keep-dag preserves the review artifact" ;;
+    t46) echo "trust-contract THREAT_MODEL.md states the two trust bases (exam integrity uncaged; budget-reset/gate caged) and the named out-of-scope boundaries, linked from the README" ;;
   esac
 }
 
