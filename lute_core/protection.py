@@ -14,7 +14,6 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 from dataclasses import dataclass, asdict
 from typing import Any
 
@@ -49,7 +48,17 @@ def protected_files(globs: list[str]) -> list[str]:
     matchers = [glob_re(g) for g in globs]
     files: list[str] = []
     for root, dirs, names in os.walk("."):
-        dirs[:] = [d for d in dirs if d not in (".git", ".lute")]
+        kept_dirs: list[str] = []
+        for name in dirs:
+            if name in (".git", ".lute"):
+                continue
+            rel = os.path.relpath(os.path.join(root, name), ".")
+            if os.path.islink(os.path.join(root, name)):
+                if any(m.match(rel) for m in matchers):
+                    files.append(rel)
+                continue
+            kept_dirs.append(name)
+        dirs[:] = kept_dirs
         for name in names:
             rel = os.path.relpath(os.path.join(root, name), ".")
             if any(m.match(rel) for m in matchers):
@@ -117,7 +126,21 @@ def _rel(path: str) -> str | None:
     return None if rel == ".." or rel.startswith(".." + os.sep) else rel
 
 
+def _symlink_ancestor(path: str) -> str | None:
+    cur = ""
+    for part in os.path.normpath(path).split(os.sep)[:-1]:
+        if part in ("", "."):
+            continue
+        cur = os.path.join(cur, part) if cur else part
+        if os.path.islink(cur):
+            return cur
+    return None
+
+
 def _current_record(path: str) -> FileRecord | None:
+    if ancestor := _symlink_ancestor(path):
+        raw = f"{ancestor}->{os.readlink(ancestor)}".encode()
+        return FileRecord(path, "symlink-ancestor", 0o777, _sha(raw), "worktree", raw)
     try:
         st = os.lstat(path)
     except OSError:
@@ -187,9 +210,15 @@ class Protection:
             manifest = self.repo_relative_control_path(self.ctx.manifest_path)
             if manifest:
                 paths.append(manifest)
+            real_manifest = self.repo_relative_control_path(os.path.realpath(self.ctx.manifest_path))
+            if real_manifest:
+                paths.append(real_manifest)
         config = self.repo_relative_control_path(self.ctx.paths.config)
         if config:
             paths.append(config)
+        real_config = self.repo_relative_control_path(os.path.realpath(self.ctx.paths.config))
+        if real_config:
+            paths.append(real_config)
         return sorted(set(paths))
 
     def repo_relative_control_path(self, path: str) -> str | None:
@@ -210,29 +239,34 @@ class Protection:
             return []
         matchers = [glob_re(glob) for glob in globs]
         out: list[tuple[str, FileRecord]] = []
-        for line in self.git.text("ls-tree", "-r", ref).splitlines():
-            meta, _, path = line.partition("\t")
+        for entry in self.git.run("ls-tree", "-rz", ref, text=False).stdout.split(b"\0"):
+            if not entry:
+                continue
+            meta_b, sep, path_b = entry.partition(b"\t")
+            path = os.fsdecode(path_b)
             if not path or not any(m.match(path) for m in matchers):
                 continue
+            meta = meta_b.decode("ascii", "replace")
             mode_s, git_type, object_id = meta.split()[:3]
             full_mode = int(mode_s, 8)
             kind = _kind_from_mode(full_mode, git_type)
             mode = _git_record_mode(full_mode, kind)
-            raw = self.git.show_bytes(f"{ref}:{path}")
+            raw = self.git.object_bytes(object_id)
             digest = object_id if raw is None else _sha(raw)
             out.append((path, FileRecord(path, kind, mode, digest, "git", raw)))
         return out
 
     def git_record_at(self, ref: str, path: str) -> FileRecord | None:
-        line = self.git.text("ls-tree", ref, "--", path).strip()
-        if not line:
+        raw_entry = self.git.run("ls-tree", "-z", ref, "--", f":(literal){path}", text=False).stdout.rstrip(b"\0")
+        if not raw_entry:
             return None
-        meta, _, _ = line.partition("\t")
+        meta_b, _, _ = raw_entry.partition(b"\t")
+        meta = meta_b.decode("ascii", "replace")
         mode_s, git_type, object_id = meta.split()[:3]
         full_mode = int(mode_s, 8)
         kind = _kind_from_mode(full_mode, git_type)
         mode = _git_record_mode(full_mode, kind)
-        raw = self.git.show_bytes(f"{ref}:{path}")
+        raw = self.git.object_bytes(object_id)
         digest = object_id if raw is None else _sha(raw)
         return FileRecord(path, kind, mode, digest, "git", raw)
 
@@ -296,27 +330,56 @@ class Protection:
 
     def patch_for(self, paths: list[str], baseline: ProtectionBaseline) -> bytes:
         chunks: list[bytes] = []
-        if paths:
-            result = subprocess.run(
-                ["git", "-C", self.git.root, "diff", "--binary", baseline.base_ref, "--", *paths],
-                capture_output=True,
+        safe_paths = [path for path in paths if not _symlink_ancestor(path)]
+        safe_specs = [f":(literal){path}" for path in safe_paths]
+        unsafe_paths = sorted(set(paths) - set(safe_paths))
+        if safe_paths:
+            result = self.git.run(
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+                baseline.base_ref,
+                "--",
+                *safe_specs,
+                check=False,
+                text=False,
             )
             chunks.append(result.stdout)
-        for path in paths:
-            if path in baseline.records or self.git.ok("ls-files", "--error-unmatch", "--", path) or not os.path.lexists(path):
+        for path in safe_paths:
+            if path in baseline.records or self.git.ok("ls-files", "--error-unmatch", "--", f":(literal){path}") or not os.path.lexists(path):
                 continue
-            result = subprocess.run(
-                ["git", "-C", self.git.root, "diff", "--binary", "--no-index", "--", "/dev/null", path],
-                capture_output=True,
+            result = self.git.run(
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+                "--no-index",
+                "--",
+                "/dev/null",
+                path,
+                check=False,
+                text=False,
             )
             if result.stdout:
                 chunks.append(result.stdout)
+        if unsafe_paths:
+            chunks.append(("diff omitted for symlink-ancestor path(s): " + ", ".join(unsafe_paths) + "\n").encode())
         return b"\n".join(chunk for chunk in chunks if chunk)
 
     def copy_current(self, paths: list[str], files_dir: str) -> list[str]:
         saved: list[str] = []
         for path in paths:
             if not os.path.lexists(path):
+                continue
+            if ancestor := _symlink_ancestor(path):
+                dest = os.path.join(files_dir, ancestor)
+                self.store.ensure_dir(os.path.dirname(dest))
+                try:
+                    os.symlink(os.readlink(ancestor), dest)
+                    saved.append(ancestor)
+                except OSError:
+                    pass
                 continue
             dest = os.path.join(files_dir, path)
             self.store.ensure_dir(os.path.dirname(dest))
@@ -354,6 +417,8 @@ class Protection:
         self.git.reset_index()
 
     def remove_path(self, path: str) -> None:
+        if ancestor := _symlink_ancestor(path):
+            path = ancestor
         if not os.path.lexists(path):
             return
         if os.path.isdir(path) and not os.path.islink(path):

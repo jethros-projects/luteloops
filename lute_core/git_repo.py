@@ -7,6 +7,7 @@ repository operations rather than command strings.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -18,15 +19,53 @@ from .errors import GitError, PreconditionError
 class GitRepo:
     root: str
 
+    def _safe_args(self, cwd: str | None = None) -> list[str]:
+        root = cwd or self.root
+        args = ["-c", "core.hooksPath=/dev/null", "-c", "core.quotePath=false"]
+        try:
+            result = subprocess.run(
+                ["git", "-C", root, "config", "--local", "--name-only", "--get-regexp", r"^(filter|diff)\."],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            return args
+        if result.returncode:
+            return args
+        for name in sorted(set(result.stdout.splitlines())):
+            if re.fullmatch(r"filter\..+\.(clean|smudge|process)", name):
+                args += ["-c", f"{name}="]
+            elif re.fullmatch(r"diff\..+\.(command|textconv)", name):
+                args += ["-c", f"{name}="]
+        return args
+
     @classmethod
     def discover(cls) -> "GitRepo":
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if result.returncode:
             raise PreconditionError("not a git repository; run: git init   (lute keeps all state in git)")
         return cls(result.stdout.strip())
 
     def run(self, *args: str, cwd: str | None = None, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
-        result = subprocess.run(["git", "-C", cwd or self.root, *args], capture_output=True, text=text)
+        root = cwd or self.root
+        env = dict(os.environ)
+        env.pop("GIT_EXTERNAL_DIFF", None)
+        kwargs = {"encoding": "utf-8", "errors": "replace"} if text else {}
+        result = subprocess.run(
+            ["git", "-C", root, *self._safe_args(root), *args],
+            capture_output=True,
+            text=text,
+            env=env,
+            **kwargs,
+        )
         if check and result.returncode:
             msg = (result.stderr or result.stdout or "").strip()
             raise GitError(f"git {' '.join(args)} failed: {msg}")
@@ -40,7 +79,14 @@ class GitRepo:
 
     def shared_text(self, shared_root: str, *args: str) -> str:
         for _ in range(30):
-            result = subprocess.run(["git", "-C", shared_root, *args], capture_output=True, text=True)
+            result = subprocess.run(
+                ["git", "-C", shared_root, *self._safe_args(shared_root), *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env={k: v for k, v in os.environ.items() if k != "GIT_EXTERNAL_DIFF"},
+            )
             if result.returncode == 0:
                 return result.stdout
             if "File exists" in result.stderr:
@@ -68,8 +114,12 @@ class GitRepo:
     def status_porcelain(self, *extra: str, cwd: str | None = None) -> str:
         return self.text("status", "--porcelain", *extra, cwd=cwd)
 
+    def status_porcelain_z(self, *extra: str, cwd: str | None = None) -> list[str]:
+        raw = self.run("status", "--porcelain=v1", "-z", *extra, cwd=cwd, text=False).stdout
+        return [os.fsdecode(item) for item in raw.split(b"\0") if item]
+
     def untracked(self, cwd: str | None = None) -> set[str]:
-        return {line[3:] for line in self.status_porcelain(cwd=cwd).splitlines() if line.startswith("?? ")}
+        return {entry[3:] for entry in self.status_porcelain_z(cwd=cwd) if entry.startswith("?? ")}
 
     def reset_index(self, cwd: str | None = None) -> None:
         self.text("reset", "-q", cwd=cwd)
@@ -97,7 +147,14 @@ class GitRepo:
         return head
 
     def show_bytes(self, ref_path: str, cwd: str | None = None) -> bytes | None:
-        result = subprocess.run(["git", "-C", cwd or self.root, "show", ref_path], capture_output=True)
+        root = cwd or self.root
+        env = dict(os.environ)
+        env.pop("GIT_EXTERNAL_DIFF", None)
+        result = subprocess.run(["git", "-C", root, *self._safe_args(root), "show", ref_path], capture_output=True, env=env)
+        return result.stdout if result.returncode == 0 else None
+
+    def object_bytes(self, object_id: str, cwd: str | None = None) -> bytes | None:
+        result = self.run("cat-file", "-p", object_id, cwd=cwd, check=False, text=False)
         return result.stdout if result.returncode == 0 else None
 
     def clear_stale_locks(self, cwd: str | None = None) -> None:
@@ -132,13 +189,13 @@ class GitRepo:
 
         self.reset_index()
         excludes = [":(exclude)INBOX", ":(exclude).lute/quarantine"]
-        excludes.extend(f":(exclude){path}" for path in sorted(exclude_paths))
+        excludes.extend(f":(exclude,literal){path}" for path in sorted(exclude_paths))
         self.text("add", "-u", "--", ".", *excludes)
         for path in sorted(self.untracked() - pre_untracked):
             if not excluded(path):
-                self.text("add", "--", path)
+                self.text("add", "--", f":(literal){path}")
         if exclude_paths:
-            self.ok("reset", "-q", "HEAD", "--", *sorted(exclude_paths))
+            self.ok("reset", "-q", "HEAD", "--", *(f":(literal){path}" for path in sorted(exclude_paths)))
         return bool(self.text("diff", "--cached", "--name-only").strip())
 
     def reset_mixed(self, ref: str, cwd: str | None = None) -> None:
@@ -148,10 +205,10 @@ class GitRepo:
         self.text("branch", "-f", branch, ref, cwd=cwd)
 
     def restore_path(self, ref: str, path: str, cwd: str | None = None) -> bool:
-        return self.ok("checkout", "-q", ref, "--", path, cwd=cwd)
+        return self.ok("checkout", "-q", ref, "--", f":(literal){path}", cwd=cwd)
 
     def commit(self, message: str, *, allow_empty: bool = False) -> None:
-        args = ["commit", "-q"]
+        args = ["commit", "-q", "--no-verify"]
         if allow_empty:
             args.append("--allow-empty")
         args += ["-m", message]
@@ -167,7 +224,7 @@ class GitRepo:
         self.ok("worktree", "prune")
 
     def worktree_remove(self, worktree: str) -> None:
-        subprocess.run(["git", "-C", self.root, "worktree", "remove", "--force", worktree], capture_output=True)
+        self.run("worktree", "remove", "--force", worktree, check=False)
 
     def delete_branch(self, branch: str) -> None:
         self.ok("branch", "-D", branch)
