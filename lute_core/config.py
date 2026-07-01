@@ -66,9 +66,10 @@ class AnswerAuthority:
                 # ever sees a partial key) and exclusive (the first creator wins,
                 # so every process converges on one key and cached copies never
                 # diverge from the file).
+                secret = os.urandom(16).hex().encode()
                 fd, tmp = tempfile.mkstemp(dir=directory)
                 try:
-                    os.write(fd, os.urandom(16).hex().encode())
+                    os.write(fd, secret)
                     os.fsync(fd)
                 finally:
                     os.close(fd)
@@ -78,10 +79,20 @@ class AnswerAuthority:
                     pass
                 except OSError:
                     # A filesystem without hard links (FAT/exFAT, some SMB/NFS):
-                    # fall back to an atomic rename — slightly less exclusive under
-                    # a concurrent first run, but every reader still sees a whole key.
-                    if not os.path.lexists(path):
-                        os.replace(tmp, path)
+                    # claim the path with O_EXCL instead of a clobbering replace.
+                    # O_EXCL is the exclusive primitive here too, so exactly one
+                    # creator wins and every other process reads its key — no
+                    # divergent keys under a concurrent first run.
+                    try:
+                        kfd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    except FileExistsError:
+                        pass
+                    else:
+                        try:
+                            os.write(kfd, secret)
+                            os.fsync(kfd)
+                        finally:
+                            os.close(kfd)
                 finally:
                     if os.path.lexists(tmp):
                         os.remove(tmp)

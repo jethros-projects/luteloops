@@ -168,14 +168,17 @@ def _symlink_ancestor(path: str) -> str | None:
 
 def _submodule_git(path: str, *args: str) -> subprocess.CompletedProcess | None:
     # We read git metadata inside a directory the agent controls, so we neutralize
-    # every knob that could run agent code (hooks, fsmonitor, external diff/pager)
-    # and scrub the GIT_* env that could redirect git at another repo.
+    # every knob that could run agent code (hooks, fsmonitor, external diff/pager),
+    # scrub the GIT_* env that could redirect git at another repo, and bound the
+    # wall-clock: a planted FIFO (a HEAD ref, an [include]-ed config) would
+    # otherwise block git in open() forever. A timeout returns None, i.e. "not a
+    # clean submodule here" — flagged, never a hang.
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     cmd = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-c", "core.pager=cat",
            "-C", path, *args]
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
-    except OSError:
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
         return None
 
 
