@@ -87,11 +87,15 @@ as an engineering note; here they are the user-facing contract.
   a real cage does.
 - **Exam material inside a submodule.** A `git submodule` under a `protected:` glob
   is policed as a boundary: quarantine flags it (and restores the pinned mount) when
-  it is deleted, replaced with plain files, or moved to a different commit. What it
-  cannot police is a *dirty working tree of a checkout still at the recorded commit* —
-  an untracked file the agent adds inside a genuine submodule is that other
-  repository's business, not a superproject blob. A `done_when` that reads such a file
-  is trusting content Lute does not pin; keep exam material in the superproject.
+  it is deleted, replaced with plain files, moved to a different commit, or has any
+  *tracked* file modified or deleted in its working tree (checked at the recorded
+  commit, so a gitdir-pointer forgery that keeps `HEAD` at that commit while
+  overwriting a tracked exam file is still caught). The one residual it cannot see is
+  a brand-new *untracked* file added inside a genuine, otherwise-clean checkout —
+  untracked content is that other repository's business, not a superproject blob, and
+  is ignored so a legitimate checkout's build artifacts do not false-flag. A
+  `done_when` that reads a file which does not exist in the pinned submodule tree is
+  trusting content Lute does not pin; keep exam material in the superproject.
 - **Cost / token limits.** Budget is bounded by `runs` and `secs` proxies only. A
   real spend cap belongs to an agent-reported hook, never to the runner guessing
   at dollars.

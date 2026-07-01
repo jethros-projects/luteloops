@@ -166,18 +166,34 @@ def _symlink_ancestor(path: str) -> str | None:
     return None
 
 
-def _submodule_head(path: str) -> str | None:
-    """The commit a checked-out submodule points at, or None if this directory
-    is not a git checkout. Hooks and fsmonitor are disabled: we only read, and
-    the directory's config is agent-controlled."""
+def _submodule_git(path: str, *args: str) -> subprocess.CompletedProcess | None:
+    # We read git metadata inside a directory the agent controls, so we neutralize
+    # every knob that could run agent code (hooks, fsmonitor, external diff/pager)
+    # and scrub the GIT_* env that could redirect git at another repo.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    cmd = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-c", "core.pager=cat",
+           "-C", path, *args]
     try:
-        result = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", "-C", path, "rev-parse", "HEAD"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-        )
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     except OSError:
         return None
-    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _submodule_head(path: str) -> str | None:
+    """The commit a checked-out submodule points at — but only when its working
+    tree is clean at that commit (no modified or deleted TRACKED files), so a
+    gitdir-pointer forgery that keeps HEAD at the recorded commit while
+    overwriting an exam file is a change, not a pristine boundary. None means
+    'not a clean submodule here' — flag it. (An added UNTRACKED file the check
+    reads is the residual noted in THREAT_MODEL.md; untracked is ignored so a
+    legitimate checkout's build artifacts do not false-flag.)"""
+    head = _submodule_git(path, "rev-parse", "HEAD")
+    if head is None or head.returncode:
+        return None
+    clean = _submodule_git(path, "--no-optional-locks", "diff", "--no-ext-diff", "--no-textconv", "--quiet", "HEAD")
+    if clean is None or clean.returncode:
+        return None
+    return head.stdout.strip()
 
 
 def _dir_is_empty(path: str) -> bool:
