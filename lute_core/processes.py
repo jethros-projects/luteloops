@@ -103,6 +103,25 @@ def stop_group(pid: int) -> bool:
     return not pid_alive(pid) and not group_alive(pid)
 
 
+def stop_run(pid: int, grace: int = 120) -> bool:
+    """Ask a runner to stop, then confirm it is gone.
+
+    A SIGINT lets the runner reap the children it owns (its agent, an in-flight
+    check or judge, or its parallel child runners) through its own teardown, then
+    exit and release the lock — no pid files, no ancestry walks. A wedged runner
+    that never returns is forced through its group as a last resort.
+    """
+    try:
+        os.kill(pid, signal.SIGINT)
+    except OSError:
+        pass
+    for _ in range(grace):
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return stop_group(pid)
+
+
 def spawn_detached(
     cmd: Sequence[str],
     *,

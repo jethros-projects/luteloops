@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import subprocess
 import tempfile
 import unittest
@@ -170,58 +171,59 @@ class ProcessTests(unittest.TestCase):
         with mock.patch.object(processes, "proc_cwd", return_value=None):
             self.assertIsNone(processes.serves_repo(12345, "/tmp/repo"))
 
-    def test_stop_preserves_lock_when_command_matches_but_cwd_unknown(self):
+    def _seeded_repo_with_lock(self, td, pid):
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+        Path(td, "seed").write_text("x")
+        subprocess.run(["git", "add", "seed"], cwd=td, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "seed"],
+            cwd=td,
+            check=True,
+        )
+        paths = Paths.for_repo(td)
+        os.makedirs(paths.state)
+        Path(paths.lock).write_text('{"pid": %d, "start": "x"}' % pid)
+        return paths
+
+    def test_stop_asks_the_runner_to_tear_itself_down(self):
+        # Cooperative stop: confirm the runner from the lock, then ask IT to stop
+        # (it reaps the children it owns). No pid files, no ancestry, no forensics.
         with tempfile.TemporaryDirectory() as td:
-            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
-            Path(td, "seed").write_text("x")
-            subprocess.run(["git", "add", "seed"], cwd=td, check=True)
-            subprocess.run(
-                ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "seed"],
-                cwd=td,
-                check=True,
-            )
+            self._seeded_repo_with_lock(td, 4242)
             old = os.getcwd()
             try:
                 os.chdir(td)
-                paths = Paths.for_repo(td)
-                os.makedirs(paths.state)
-                os.makedirs(paths.worktrees)
-                Path(paths.lock).write_text('{"pid": 12345, "start": "x"}')
-                Path(paths.worktrees, "child.pid").write_text("456\nmarker")
-                out, err = io.StringIO(), io.StringIO()
+                out = io.StringIO()
                 with mock.patch.object(processes, "command_contains", return_value=True), \
-                     mock.patch.object(processes, "serves_repo", return_value=None), \
-                     mock.patch.object(processes, "stop_group", return_value=False) as stop_group, \
-                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                     mock.patch.object(processes, "serves_repo", return_value=True), \
+                     mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
+                     contextlib.redirect_stdout(out):
                     rc = cli.cmd_stop([])
-                self.assertEqual(rc, 1)
-                self.assertTrue(Path(paths.lock).exists())
-                self.assertNotIn("stale lock", out.getvalue())
-                self.assertIn("try: kill", err.getvalue())
-                stop_group.assert_called_once_with(456)
+                self.assertEqual(rc, 0)
+                stop_run.assert_called_once_with(4242)
+                self.assertIn("stopped run pid 4242", out.getvalue())
             finally:
                 os.chdir(old)
 
-    def test_stop_parallel_child_runs_uses_recorded_marker(self):
+    def test_stop_preserves_lock_when_runner_cwd_unknown(self):
         with tempfile.TemporaryDirectory() as td:
-            paths = Paths.for_repo(td)
-            os.makedirs(paths.worktrees)
-            Path(paths.worktrees, "child.pid").write_text("456\nold-entrypoint")
-            seen: list[tuple[int, str]] = []
-
-            def command_contains(pid, needle):
-                seen.append((pid, needle))
-                return pid == 456 and needle == "old-entrypoint"
-
-            with mock.patch.object(processes, "command_contains", side_effect=command_contains), \
-                 mock.patch.object(cli, "stop_recorded_agent") as stop_agent, \
-                 mock.patch.object(processes, "stop_group", return_value=True) as stop_group:
-                self.assertEqual(cli.stop_parallel_child_runs(AppContext(td, paths, {}, "", "root", RunMode.FILE), "current-entry"), 1)
-
-            self.assertIn((456, "current-entry"), seen)
-            self.assertIn((456, "old-entrypoint"), seen)
-            stop_agent.assert_called_once()
-            stop_group.assert_called_once_with(456)
+            self._seeded_repo_with_lock(td, 12345)
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.object(processes, "command_contains", return_value=True), \
+                     mock.patch.object(processes, "serves_repo", return_value=None), \
+                     mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
+                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = cli.cmd_stop([])
+                self.assertEqual(rc, 1)
+                self.assertTrue(Path(Paths.for_repo(td).lock).exists())
+                self.assertNotIn("stale lock", out.getvalue())
+                self.assertIn("kill -INT", err.getvalue())
+                stop_run.assert_not_called()  # never signal a run we cannot confirm is ours
+            finally:
+                os.chdir(old)
 
 
 class CardAndEventTests(unittest.TestCase):
@@ -303,7 +305,22 @@ class CageTests(unittest.TestCase):
             CageTemplate("echo nope").expand("/repo", "img", [], "true")
 
     def test_default_cage_template_leaves_egress_to_operator_policy(self):
-        self.assertNotIn("--network none", DEFAULT_CAGE_TEMPLATE)
+        # Egress is ON by default: caged LLM agents and judges need network to
+        # reach their model API. Sealing is an opt-in operator template. The
+        # guard is structural so a future edit cannot silently re-brick the cage
+        # with a different spelling (the round-1 regression).
+        def disables_network(template):
+            toks = template.replace("=", " ").split()
+            return any(
+                toks[i] in ("--network", "--net") and i + 1 < len(toks) and toks[i + 1] == "none"
+                for i in range(len(toks))
+            )
+
+        self.assertFalse(disables_network(DEFAULT_CAGE_TEMPLATE))
+        # the structural guard catches every spelling the old substring missed
+        self.assertTrue(disables_network("docker run --net none img sh"))
+        self.assertTrue(disables_network("docker run --net=none img sh"))
+        self.assertTrue(disables_network("docker run --network=none img sh"))
 
 
 class CliAndProtectionTests(unittest.TestCase):
@@ -506,6 +523,137 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(ctx.manifest_path, "/repo/lute.yaml")
         self.assertEqual(ctx.root_id, "root")
         self.assertEqual(ctx.active_config()["agent"], "true")
+
+
+class FuzzParserTests(unittest.TestCase):
+    """The two parsers that turn untrusted text into trusted decisions are the
+    invariant's soft underbelly: `schema.load` (the manifest an author writes)
+    and the `ledger` accounting (the JSONL an adversarial agent can rewrite).
+    Feed each malformed and random input and assert it never crashes and never
+    misclassifies junk into a pass or a budget refund (see INVARIANT.md)."""
+
+    SEED = 0xC0FFEE  # fixed so the fuzz is deterministic and reproducible
+
+    def _scalars(self, rng):
+        return [
+            None, True, False, 0, 1, -1, rng.randint(-(10**9), 10**9),
+            rng.random() * 1e6, -rng.random() * 1e6, float("inf"), float("nan"),
+            "", "x" * rng.randint(0, 6), "10 runs", "run", "answer", "human",
+            "60s", "\x00", "🙂", "-", "--", "/", "..", "true", [], {}, [1, 2],
+            {"k": 1}, ("t",),
+        ]
+
+    def _rand_node(self, rng, depth=0):
+        keys = ["loop", "task", "agent", "done_when", "budget", "confirm",
+                "loops", "check_every", "gate", "protected", "parallel", "xyz"]
+        node = {}
+        for k in rng.sample(keys, rng.randint(0, len(keys))):
+            node[k] = rng.choice(self._scalars(rng))
+        if depth < 3 and rng.random() < 0.5:
+            node["loops"] = [self._rand_node(rng, depth + 1)
+                             for _ in range(rng.randint(0, 3))]
+        return node
+
+    def test_schema_norm_loop_never_crashes_on_garbage(self):
+        rng = random.Random(self.SEED)
+        for _ in range(600):
+            errors = []
+            node = rng.choice([self._rand_node(rng), rng.choice(self._scalars(rng))])
+            loop = schema.norm_loop(node, errors, set())
+            self.assertIsInstance(errors, list)
+            if loop is not None:
+                # a normalized loop is always fully typed and buildable
+                self.assertIsInstance(loop["id"], str)
+                self.assertIsInstance(loop["done_when"], str)
+                self.assertIsInstance(loop["confirm"], int)
+                self.assertIsInstance(loop["budget"], list)
+                spec = LoopSpec.from_normalized(loop)  # must never raise
+                self.assertIsInstance(str(spec.id), str)
+
+    def test_schema_load_returns_a_clean_triple_for_any_text(self):
+        rng = random.Random(self.SEED + 1)
+        fragments = ["loop: r\n", "done_when:\n", "budget: 9\n", "- - -\n",
+                     "\t: :\n", "loops: 3\n", "confirm: nope\n", "gate: []\n",
+                     ": !!python/object\n", "\x00\x00\n", "{{{\n", "%YAML\n"]
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "lute.yaml")
+            for _ in range(400):
+                text = "".join(rng.choice(fragments) for _ in range(rng.randint(0, 6)))
+                Path(path).write_text(text)
+                loop, schedules, errors = schema.load(path)  # must never raise
+                self.assertIsInstance(errors, list)
+                self.assertIsInstance(schedules, list)
+                self.assertTrue(loop is None or isinstance(loop, LoopSpec))
+
+    def _rand_entry(self, rng, lid="a"):
+        keys = ["loop", "run", "duration", "event", "auth", "n", "ts", "junk"]
+        entry = {k: rng.choice(self._scalars(rng))
+                 for k in rng.sample(keys, rng.randint(0, len(keys)))}
+        if rng.random() < 0.5:   # bias many entries onto the queried loop so the
+            entry["loop"] = lid   # loop-scoped accounting path is actually fuzzed,
+        return entry              # not skipped by the `loop != lid` short-circuit.
+
+    def test_ledger_accounting_is_total_and_safe_on_forged_entries(self):
+        rng = random.Random(self.SEED + 2)
+        for _ in range(600):
+            entries = [self._rand_entry(rng) for _ in range(rng.randint(0, 25))]
+            # a well-formed, author-trusted budget (as parse_budget always yields)
+            budget = [("runs", rng.randint(0, 40)), ("secs", rng.randint(0, 120))]
+            git_runs = rng.randint(0, 80)
+            spent = ledger.budget_spent(
+                "a", budget, entries, auth_for, git_runs, waited=rng.random() * 10
+            )
+            self.assertIsInstance(spent, bool)  # never raises, always a verdict
+            runs, secs = ledger.runs_since_authenticated_answer(entries, "a", auth_for)
+            self.assertIsInstance(runs, int)
+            total_runs, total_secs = ledger.ledger_totals(entries)
+            self.assertGreaterEqual(total_runs, 0)
+            # safe classification: entries now reach the token comparison (loop==lid,
+            # event=="answer") with junk `auth` values that are never our HMAC, so a
+            # rewritten ledger still mints no budget refund. Non-vacuous: were the
+            # auth check dropped, some of these forgeries would count.
+            self.assertEqual(
+                ledger.authenticated_answer_count(entries, "a", auth_for), 0
+            )
+
+    def test_ledger_authentication_discriminates_valid_from_forged(self):
+        # The positive + negative controls the broad fuzz can't express: only a
+        # genuine, distinct HMAC token authenticates; a right-shape / wrong-token
+        # forgery never does — so a rewritten ledger cannot mint a budget refund.
+        rng = random.Random(self.SEED + 4)
+        for _ in range(400):
+            entries, valid = [], set()
+            for i in range(rng.randint(0, 12)):
+                kind = rng.choice(["run", "forged", "valid", "junk"])
+                if kind == "run":
+                    entries.append({"loop": "a", "run": i, "duration": rng.random()})
+                elif kind == "forged":
+                    nonce = str(rng.randint(0, 4))  # right shape, deliberately wrong token
+                    entries.append({"loop": "a", "event": "answer", "n": nonce,
+                                    "auth": "forged-" + auth_for("a", nonce)})
+                elif kind == "valid":
+                    nonce = str(rng.randint(0, 4))
+                    token = auth_for("a", nonce)
+                    valid.add(token)
+                    entries.append({"loop": "a", "event": "answer", "n": nonce, "auth": token})
+                else:
+                    entries.append(self._rand_entry(rng))  # unrelated junk never authenticates
+            self.assertEqual(
+                ledger.authenticated_answer_count(entries, "a", auth_for), len(valid)
+            )
+            self.assertIsInstance(
+                ledger.budget_spent("a", [("runs", 3)], entries, auth_for, git_runs=len(entries)),
+                bool,
+            )
+
+    def test_ledger_jsonl_parser_ignores_malformed_lines(self):
+        rng = random.Random(self.SEED + 3)
+        chunks = ['{"loop":"a","run":1}', "{truncated", "", "null", "[1,2]",
+                  '{"x":', "\x00", '"scalar"', "42", '{"loop":"a","event":"answer"}']
+        for _ in range(400):
+            text = "\n".join(rng.choice(chunks) for _ in range(rng.randint(0, 8)))
+            entries = ledger._parse_jsonl_lines(text.splitlines())  # never raises
+            self.assertTrue(all(isinstance(e, dict) for e in entries))
 
 
 if __name__ == "__main__":

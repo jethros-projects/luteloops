@@ -510,7 +510,9 @@ This is a different trust base from exam-pass integrity: host-side checks and
 protected exams cover ordinary uncaged runs, and Lute reaps the agent's process
 group before checking, but uncaged code is still host code and can deliberately
 daemonize outside that group. Use a real cage for adversarial containment;
-human approval and answered-card budget refresh require it.
+human approval and answered-card budget refresh require it. The full contract —
+which guarantee holds caged versus uncaged, and what is explicitly out of scope —
+is stated in [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
 Approve with `lute answer release-ready approve`; after trimming whitespace,
 the answer text must be exactly `approve` to seal. On the next run the exam is
@@ -579,13 +581,15 @@ cage_mounts:                # extra host paths, mounted read-only, by name
   - "~/.config/my-agent"    # agent auth enters here; never implicitly
 ```
 
-For `judge:` checks, Lute sends the rubric as trusted instructions and wraps
-the candidate diff inside `BEGIN UNTRUSTED DIFF` / `END UNTRUSTED DIFF`
-markers. The judge runs in an empty working directory and grades the stdin diff
-only; if a grader must read or execute working files, make that a normal
-`done_when` shell check instead. The judge is told to treat diff content as
-evidence only, never as instructions, and still closes only when stdout's first
-line is exactly `PASS` and the judge command exits 0.
+A `done_when: "judge: <rubric>"` is sugar for the `lute judge -- "<rubric>"`
+command: the judge is not a special kind of check but an ordinary one whose exit
+code is the verdict, like every other `done_when`. That command sends the rubric
+as trusted instructions and wraps the candidate diff inside
+`BEGIN UNTRUSTED DIFF` / `END UNTRUSTED DIFF` markers. The judge runs in an empty
+working directory and grades the stdin diff only; if a grader must read or
+execute working files, make that a normal shell `done_when` instead. The judge is
+told to treat diff content as evidence only, never as instructions, and closes
+only when stdout's first line is exactly `PASS` and the command exits 0.
 
 The prompt still flows on stdin; output still lands in the same per-run log.
 **Secrets policy is absence:** nothing of the host is visible except the repo

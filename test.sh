@@ -301,6 +301,40 @@ EOF
   rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "lint failed on a merely-failing (administrable) exam: $(cat lint.out)"
   grep -Eq '^pass +good-root:' lint.out || die "good-root not classified pass: $(cat lint.out)"
+
+  # circular exam: a task loop whose done_when only probes for a writable file is
+  # satisfiable by the agent typing the answer; lint warns (advice, not an error).
+  mkrepo "$WORK/t7-circular"
+  cat > lute.yaml <<EOF
+loop: circ-root
+agent: "$FAKE"
+done_when: "true"
+budget: 2 runs
+loops:
+  - loop: circular
+    task: build the thing
+    done_when: "test -f done.flag"
+  - loop: grounded
+    task: build the thing
+    done_when: "test -f done.flag"
+    protected: ["done.flag"]
+  - loop: dot-grounded
+    task: build the thing
+    done_when: "test -f ./done.flag"
+    protected: ["done.flag"]
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "7circ) circular-exam guard must warn, not fail lint: $(cat lint.out)"
+  grep -q 'circular: done_when only checks that done.flag exists' lint.out \
+    || die "7circ) circular exam not flagged: $(cat lint.out)"
+  grep -Eq 'grounded:.*only checks that done.flag' lint.out \
+    && die "7circ) protecting the ground-truth file should silence the circular warning: $(cat lint.out)"
+  # the probe path is normalized like a protected: glob, so a ./-spelled probe is
+  # silenced by protecting the plain name (the escape hatch the message advises).
+  grep -Eq 'dot-grounded:.*only checks that' lint.out \
+    && die "7circ) ./-spelled probe must normalize so protected: done.flag silences it: $(cat lint.out)"
+  true
 }
 
 # ---------------------------------------------------------------- T8
@@ -1752,7 +1786,7 @@ EOF
   rc=0; LUTE_CHECK_TIMEOUT=1 "$LUTE" run --plain > out.log 2>&1 || rc=$?
   [ "$rc" -eq 3 ] || die "25f) judge timeout exited $rc, want blocked exit 3: $(cat out.log)"
   [ -f INBOX/judge-timeout.md ] || die "25f) judge timeout did not create a card"
-  grep -qF 'judge timed out after 1s' INBOX/judge-timeout.md \
+  grep -qE 'timed out after 1s' INBOX/judge-timeout.md \
     || die "25f) card does not explain the judge timeout: $(cat INBOX/judge-timeout.md)"
   mkrepo "$WORK/t25f-child"
   printf 'x\n' > essay.txt
@@ -1947,6 +1981,26 @@ EOF
   seal
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "25j) stderr warning poisoned a stdout PASS (exit $rc): $(cat out.log)"
+
+  # --- k) the judge is a plain command: `lute judge` graded purely by exit code,
+  #        with no judge: sugar. done_when is uniformly a shell command.
+  mkrepo "$WORK/t25k"
+  mkdir -p .lute
+  printf 'agent: "true"\njudge: %s --pass-if excellent\n' "$JUDGE" > .lute/config.yaml
+  cat > lute.yaml <<EOF
+loop: plain-judge
+task: t
+agent: "printf 'the work is excellent\\n' > out.txt"
+done_when: "$LUTE judge -- 'grade the work'"
+budget: 3 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "25k) direct 'lute judge' command did not close on PASS (exit $rc): $(cat out.log)"
+  # and the core carries no judge logic: checks.py holds only the sugar dispatch, not the oracle.
+  grep -q 'def payload' "$ROOT/lute_core/judge.py" || die "25k) judge oracle not housed in judge.py"
+  ! grep -q 'JUDGE_INSTRUCTION\|judge_payload\|def judge' "$ROOT/lute_core/checks.py" \
+    || die "25k) judge logic still lives in the core checks module"
 }
 
 # ---------------------------------------------------------------- T26
@@ -2007,9 +2061,13 @@ EOF
   grep -qF 'K={keepme}' cagewrap.out || die "26c) unknown braces did not survive: $(cat cagewrap.out)"
 
   # --- d) the built-in docker cage template leaves egress to the operator's template policy.
-  PYTHONPATH="$ROOT" python3 - <<'PY' || die "26d) DEFAULT_CAGE_TEMPLATE blocks network by default"
+  #        Structural (not a substring): reject --net/--network ...none in ANY spelling, so a
+  #        future edit can't silently re-brick caged LLM agents/judge (the round-1 regression).
+  PYTHONPATH="$ROOT" python3 - <<'PY' || die "26d) DEFAULT_CAGE_TEMPLATE disables network by default"
 from lute_core.cage import DEFAULT_CAGE_TEMPLATE
-assert "--network none" not in DEFAULT_CAGE_TEMPLATE
+toks = DEFAULT_CAGE_TEMPLATE.replace("=", " ").split()
+disabled = any(toks[i] in ("--network", "--net") and i + 1 < len(toks) and toks[i + 1] == "none" for i in range(len(toks)))
+assert not disabled, DEFAULT_CAGE_TEMPLATE
 PY
 }
 
@@ -2419,6 +2477,75 @@ PY
       die "32h) timed-out check child process $cpid survived"
     fi
     sleep 0.1
+  done
+
+  # --- i) lute stop reaps an in-flight done_when check's process group, not just the agent.
+  #        (The check runs in its own session for timeout reaping, so an interrupted runner
+  #        must tear it down or a paid judge / long check would keep running orphaned.)
+  mkrepo "$WORK/t32i"
+  cat > hang_check.py <<'PY'
+import subprocess, time
+p = subprocess.Popen(["python3", "-c", "import time; time.sleep(120)"])
+open("check-child.pid", "w").write(str(p.pid))
+time.sleep(120)
+PY
+  printf 'loop: hang-check\nagent: "true"\ntask: t\ndone_when: "python3 hang_check.py"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  "$LUTE" run --bg > bg.out 2>&1
+  pid=$(grep -o 'pid [0-9][0-9]*' bg.out | grep -o '[0-9][0-9]*')
+  [ -n "$pid" ] || die "32i) no bg pid: $(cat bg.out)"
+  i=0; while [ ! -f check-child.pid ]; do i=$((i+1)); [ "$i" -gt 100 ] && die "32i) in-flight check never started"; sleep 0.1; done
+  cpid="$(cat check-child.pid)"
+  "$LUTE" stop > stop.out 2>&1 || die "32i) stop failed: $(cat stop.out)"
+  i=0
+  while kill -0 "$cpid" 2>/dev/null; do
+    i=$((i+1))
+    if [ "$i" -gt 50 ]; then
+      kill "$cpid" 2>/dev/null || true
+      die "32i) stop left in-flight check child $cpid alive"
+    fi
+    sleep 0.1
+  done
+
+  # --- j) stopping a PARALLEL run cascades: the parent reaps its child runners,
+  #        and each child runner reaps its own agent (no orphans, no pid files).
+  mkrepo "$WORK/t32j"
+  root="$PWD"
+  cat > lute.yaml <<EOF
+loop: par-stop
+agent: "$FAKE"
+done_when: "false"
+parallel: true
+budget: 50 runs
+loops:
+  - loop: child-a
+    task: t
+    done_when: "false"
+    budget: 50 runs
+  - loop: child-b
+    task: t
+    done_when: "false"
+    budget: 50 runs
+EOF
+  cat > playbook.json <<EOF
+{ "child-a": { "1": [ {"trap_sleep": {"seconds": 120, "pid": "$root/a.pid"}} ] },
+  "child-b": { "1": [ {"trap_sleep": {"seconds": 120, "pid": "$root/b.pid"}} ] } }
+EOF
+  seal
+  "$LUTE" run --bg > bg.out 2>&1
+  ppid_=$(grep -o 'pid [0-9][0-9]*' bg.out | grep -o '[0-9][0-9]*')
+  [ -n "$ppid_" ] || die "32j) no bg pid: $(cat bg.out)"
+  i=0; while [ ! -f "$root/a.pid" ] || [ ! -f "$root/b.pid" ]; do i=$((i+1)); [ "$i" -gt 150 ] && die "32j) parallel child agents never started"; sleep 0.1; done
+  apid="$(cat "$root/a.pid")"; bpid="$(cat "$root/b.pid")"
+  "$LUTE" stop > stop.out 2>&1 || die "32j) stop failed: $(cat stop.out)"
+  for who in "parent:$ppid_" "child-a-agent:$apid" "child-b-agent:$bpid"; do
+    name="${who%%:*}"; p="${who##*:}"
+    i=0
+    while kill -0 "$p" 2>/dev/null; do
+      i=$((i+1))
+      if [ "$i" -gt 80 ]; then kill "$p" 2>/dev/null || true; die "32j) stop left $name ($p) alive"; fi
+      sleep 0.1
+    done
   done
 }
 
@@ -3494,8 +3621,43 @@ EOF
   grep -q -- '--keep-dag requires --dag' out.log || die "45c) error does not explain dependency: $(cat out.log)"
 }
 
+# ---------------------------------------------------------------- T46
+t_t46() { # trust-contract: THREAT_MODEL.md states the two trust bases and the out-of-scope boundaries, so the honesty is a contract that can't silently drift
+  TM="$ROOT/THREAT_MODEL.md"
+  [ -f "$TM" ] || die "46) THREAT_MODEL.md is missing; the trust model must be stated, not discovered"
+  # the load-bearing distinction: exam-pass integrity holds uncaged...
+  grep -Eqi 'exam-pass integrity' "$TM" || die "46) threat model does not name exam-pass integrity: $TM"
+  grep -Eqi 'uncaged' "$TM" || die "46) threat model does not distinguish the uncaged trust base"
+  # ...while budget reset and human approval are caged-only, anchored on the answer-auth key
+  grep -Eqi 'answer-auth key' "$TM" || die "46) threat model does not name the answer-auth key as the caged secret"
+  grep -Eqi 'gate: human' "$TM" || die "46) threat model does not state the gate: human cage requirement"
+  # the intent sentence: isolation is fs + host secrets, egress is the operator's to seal
+  grep -Eqi 'egress' "$TM" || die "46) threat model does not scope network egress"
+  grep -Eqi 'operator' "$TM" || die "46) threat model does not name the operator's egress responsibility"
+  # explicitly-named out-of-scope boundaries, not implied ones
+  grep -Eqi 'setsid|daemoniz' "$TM" || die "46) threat model omits the daemonization boundary"
+  grep -Eqi 'SIGKILL|orphan' "$TM" || die "46) threat model omits the container-orphan boundary"
+  grep -Eqi 'token|cost' "$TM" || die "46) threat model omits the cost/token out-of-scope note"
+  # discoverable, not orphaned: a reader is pointed to the contract from the README
+  grep -q 'THREAT_MODEL.md' "$ROOT/README.md" || die "46) README does not link THREAT_MODEL.md; an unlinked contract drifts"
+
+  # the core invariant is stated, and its clause->notch mapping points only at
+  # notches that actually exist (so a renamed/removed notch can't leave the claim
+  # citing a guard that is no longer there). runner.py points a code reader to it.
+  INV="$ROOT/INVARIANT.md"
+  [ -f "$INV" ] || die "46) INVARIANT.md is missing; the core claim must be stated, not implicit"
+  grep -Eqi 'cannot author its own verdict' "$INV" || die "46) INVARIANT.md does not state the invariant"
+  grep -q 'INVARIANT.md' "$ROOT/lute_core/runner.py" || die "46) runner.py does not point a code reader to INVARIANT.md"
+  cited=$(grep -oE '(^|[^A-Za-z0-9])t[0-9]+' "$INV" | grep -oE 't[0-9]+' | sort -u)
+  [ -n "$cited" ] || die "46) INVARIANT.md maps no clause to any notch"
+  for n in $cited; do
+    case " $ALL " in *" $n "*) ;; *) die "46) INVARIANT.md cites $n, which is not a real notch in ALL" ;; esac
+  done
+  true
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -3543,6 +3705,7 @@ desc() {
     t43) echo "uninstall      removes installer-owned tool artifacts while preserving project state" ;;
     t44) echo "quarantine     trusted exam/control edits are quarantined, inspectable, and excluded from run commits" ;;
     t45) echo "plan-dag       lute plan --dag reasons from dependencies but emits native lute.proposed.yaml; --keep-dag preserves the review artifact" ;;
+    t46) echo "stated-contracts THREAT_MODEL.md states the two trust bases + named out-of-scope boundaries (README-linked); INVARIANT.md states 'the builder cannot author its own verdict' and maps each clause to a real notch (runner-linked)" ;;
   esac
 }
 
