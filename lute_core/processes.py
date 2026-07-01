@@ -6,8 +6,11 @@ import os
 import shutil
 import signal
 import subprocess
+import stat
 import time
 from typing import Sequence
+
+O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 def pid_alive(pid: int | None) -> bool:
@@ -34,17 +37,16 @@ def group_alive(pgid: int | None) -> bool:
     return True
 
 
-def command_contains(pid: int | None, needle: str) -> bool:
-    if not pid or not pid_alive(pid):
-        return False
-    cmd = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    return needle in cmd
-
-
 def command_line(pid: int | None) -> str:
     if not pid:
         return ""
-    return subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout
 
 
 def proc_cwd(pid: int) -> str | None:
@@ -58,7 +60,13 @@ def proc_cwd(pid: int) -> str | None:
     if not shutil.which("lsof"):
         return None
     try:
-        result = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
     except FileNotFoundError:
         return None
     for line in result.stdout.splitlines():
@@ -79,9 +87,40 @@ def serves_repo(pid: int, repo_root: str) -> bool | None:
         return False
 
 
+def descendants(pid: int) -> list[int]:
+    seen: set[int] = set()
+    frontier = [pid]
+    while frontier:
+        parent = frontier.pop()
+        try:
+            result = subprocess.run(
+                ["pgrep", "-P", str(parent)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except FileNotFoundError:
+            return sorted(seen, reverse=True)
+        for line in result.stdout.splitlines():
+            try:
+                child = int(line)
+            except ValueError:
+                continue
+            if child not in seen:
+                seen.add(child)
+                frontier.append(child)
+    return sorted(seen, reverse=True)
+
+
 def stop_group(pid: int) -> bool:
     """SIGINT/SIGKILL a process group, falling back to the pid, and report whether it is gone."""
     def sig(sig_no: int) -> None:
+        for child in descendants(pid):
+            try:
+                os.kill(child, sig_no)
+            except OSError:
+                pass
         try:
             os.killpg(pid, sig_no)
         except OSError:
@@ -122,6 +161,24 @@ def stop_run(pid: int, grace: int = 120) -> bool:
     return stop_group(pid)
 
 
+def open_output(path: str, *, append: bool):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    if O_NOFOLLOW:
+        flags |= O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o644)
+    except OSError:
+        try:
+            st = os.lstat(path)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                os.remove(path)
+        except OSError:
+            pass
+        fd = os.open(path, flags, 0o644)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
 def spawn_detached(
     cmd: Sequence[str],
     *,
@@ -134,7 +191,7 @@ def spawn_detached(
         if ignore_hup:
             signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
-    with open(stdout_path, "a") as output, open(os.devnull) as devin:
+    with open_output(stdout_path, append=True) as output, open(os.devnull) as devin:
         return subprocess.Popen(
             list(cmd),
             cwd=cwd,
