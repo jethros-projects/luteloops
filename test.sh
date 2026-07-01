@@ -3656,8 +3656,367 @@ t_t46() { # trust-contract: THREAT_MODEL.md states the two trust bases and the o
   true
 }
 
+# ---------------------------------------------------------------- T47
+t_t47() { # host-boundary hardening: agent-writable repo state cannot steer host reads, writes, git execution, checks, or control files
+  # --- a) predictable log leaves are replaced, not followed.
+  mkrepo "$WORK/t47-log"
+  cat > lute.yaml <<EOF
+loop: log
+agent: "sh ./agent.sh"
+task: write log output
+done_when: "false"
+budget: 1 run
+EOF
+  cat > agent.sh <<'EOF'
+#!/bin/sh
+printf 'AGENT-LOG-CONTROLLED\n'
+EOF
+  chmod +x agent.sh
+  seal
+  mkdir -p .lute/logs
+  printf 'original\n' > "$WORK/log-victim"
+  ln -s "$WORK/log-victim" .lute/logs/log.run1.log
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  grep -q '^original$' "$WORK/log-victim" || die "47a) log symlink target changed: $(cat "$WORK/log-victim")"
+  [ ! -L .lute/logs/log.run1.log ] || die "47a) runner left a log symlink in place"
+
+  # --- b) journal symlinks are not tailed into escalation cards.
+  mkrepo "$WORK/t47-journal"
+  cat > lute.yaml <<'EOF'
+loop: journal
+done_when: "false"
+budget: 0 runs
+EOF
+  seal
+  mkdir -p .lute/journal
+  printf 'HOST-JOURNAL-SECRET\n' > "$WORK/journal-secret"
+  ln -s "$WORK/journal-secret" .lute/journal/journal.md
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "47b) impossible zero-budget loop unexpectedly closed"
+  [ -f INBOX/journal.md ] || die "47b) escalation card missing"
+  ! grep -q HOST-JOURNAL-SECRET INBOX/journal.md || die "47b) journal symlink leaked into card"
+
+  # --- c) forged quarantine records with symlinked patches are ignored.
+  mkrepo "$WORK/t47-qdiff"
+  mkdir -p .lute/quarantine/qbad
+  printf 'HOST-QUARANTINE-SECRET\n' > "$WORK/qsecret"
+  printf '{"id":"qbad","paths":["x"],"patch":"changes.patch"}\n' > .lute/quarantine/qbad/meta.json
+  ln -s "$WORK/qsecret" .lute/quarantine/qbad/changes.patch
+  rc=0; "$LUTE" quarantine diff qbad > out.log 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "47c) forged quarantine record was accepted"
+  ! grep -q HOST-QUARANTINE-SECRET out.log || die "47c) symlinked quarantine patch leaked"
+
+  # --- d) agent-planted Git hooks do not execute during host commits.
+  mkrepo "$WORK/t47-hook"
+  cat > lute.yaml <<EOF
+loop: hook
+agent: "sh ./agent.sh"
+task: plant a hook
+done_when: "false"
+budget: 1 run
+EOF
+  cat > agent.sh <<EOF
+#!/bin/sh
+mkdir -p .git/hooks
+cat > .git/hooks/pre-commit <<'HOOK'
+#!/bin/sh
+printf hook-ran > "$WORK/hook-proof"
+exit 0
+HOOK
+chmod +x .git/hooks/pre-commit
+printf changed > hook-output.txt
+EOF
+  chmod +x agent.sh
+  seal
+  rm -f "$WORK/hook-proof"
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ ! -f "$WORK/hook-proof" ] || die "47d) host git commit executed an agent-planted hook"
+
+  # --- e) agent-controlled Git filters do not execute during host staging.
+  mkrepo "$WORK/t47-filter"
+  cat > lute.yaml <<EOF
+loop: filter
+agent: "sh ./agent.sh"
+task: plant a clean filter
+done_when: "false"
+budget: 1 run
+EOF
+  cat > agent.sh <<EOF
+#!/bin/sh
+git config filter.pwn.clean "sh -c 'printf filter-ran > $WORK/filter-proof; cat'"
+printf '*.pwn filter=pwn\n' > .gitattributes
+printf payload > sample.pwn
+EOF
+  chmod +x agent.sh
+  seal
+  rm -f "$WORK/filter-proof"
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ ! -f "$WORK/filter-proof" ] || die "47e) host git add executed an agent-controlled clean filter"
+
+  # --- f) protected quarantine does not copy through a symlinked ancestor.
+  mkrepo "$WORK/t47-quarantine"
+  mkdir -p secret "$WORK/outside-secret"
+  printf 'baseline\n' > secret/fixture.txt
+  printf 'HOST-CANARY-016\n' > "$WORK/outside-secret/fixture.txt"
+  cat > lute.yaml <<EOF
+loop: q
+agent: "sh ./agent.sh"
+task: tamper with protected path
+done_when: "false"
+protected:
+  - secret/fixture.txt
+budget: 1 run
+EOF
+  cat > agent.sh <<EOF
+#!/bin/sh
+rm -rf secret
+ln -s "$WORK/outside-secret" secret
+EOF
+  chmod +x agent.sh
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  ! grep -R HOST-CANARY-016 .lute/quarantine >/dev/null 2>&1 || die "47f) quarantine copied a host file through a symlinked ancestor"
+  grep -q HOST-CANARY-016 "$WORK/outside-secret/fixture.txt" || die "47f) outside canary was modified"
+
+  # --- g) answer paths are loop ids, not filesystem paths.
+  mkrepo "$WORK/t47-answer-path"
+  printf 'seed\n' > outside.md
+  git add outside.md && git commit -q -m seed
+  rc=0; "$LUTE" answer ../outside injected > out.log 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "47g) traversal loop id was accepted"
+  ! grep -q ANSWER outside.md || die "47g) traversal answer modified outside.md"
+
+  # --- h) answer-auth binds the answer body.
+  mkrepo "$WORK/t47-answer-auth"
+  mkdir -p .lute
+  printf 'cage: "sh -c {cmd}"\n' > .lute/config.yaml
+  cat > lute.yaml <<'EOF'
+loop: gate
+done_when: "true"
+gate: human
+budget: 1 run
+EOF
+  git add -f .lute/config.yaml
+  git add lute.yaml && git commit -q -m fixture
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 4 ] || die "47h) gate did not pause first: $(cat out.log)"
+  "$LUTE" answer gate no > answer.log 2>&1
+  python3 - <<'PY'
+from pathlib import Path
+p = Path("INBOX/gate.md")
+p.write_text(p.read_text().replace("ANSWER: no", "ANSWER: approve"))
+PY
+  git add INBOX/gate.md && git commit -q -m "tamper answer body"
+  rc=0; "$LUTE" run --plain > rerun.log 2>&1 || rc=$?
+  [ "$rc" -eq 4 ] || die "47h) tampered answer body sealed the gate: $(cat rerun.log)"
+
+  # --- i) unreviewed proposed plans lint without executing checks.
+  mkrepo "$WORK/t47-plan"
+  cat > plan_agent.sh <<'EOF'
+#!/bin/sh
+cat > lute.proposed.yaml <<'YAML'
+loop: pwn
+agent: "sh -c true"
+task: proposed by adversarial planner
+done_when: "sh -c 'printf planned-rce > .lute-plan-rce; exit 0'"
+budget: 1 run
+YAML
+EOF
+  chmod +x plan_agent.sh
+  git add plan_agent.sh && git commit -q -m fixture
+  rc=0; "$LUTE" plan --agent "sh ./plan_agent.sh" "draft a plan" > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "47i) plan did not close under no-exec lint: $(cat out.log)"
+  [ ! -f .lute-plan-rce ] || die "47i) proposed done_when executed during plan lint"
+
+  # --- j) parallel child worktree paths cannot be pre-seeded as symlinks.
+  mkrepo "$WORK/t47-parallel"
+  cat > lute.yaml <<'EOF'
+loop: p
+done_when: "true"
+parallel: true
+loops:
+  - loop: c
+    agent: "sh -c 'printf child > child-ran'"
+    task: run child
+    done_when: "false"
+    budget: 1 run
+EOF
+  seal
+  mkdir -p .lute/wt "$WORK/evil-worktree"
+  printf 'gitdir: nowhere\n' > "$WORK/evil-worktree/.git"
+  ln -s "$WORK/evil-worktree" .lute/wt/p__c
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ ! -f "$WORK/evil-worktree/child-ran" ] || die "47j) child runner was redirected into symlinked worktree"
+  [ ! -L .lute/wt/p__c ] || die "47j) symlinked worktree path survived"
+
+  # --- k) control files must be regular in-repo files.
+  mkrepo "$WORK/t47-manifest-symlink"
+  printf 'loop: m\ndone_when: "true"\nbudget: 1 run\n' > real.yaml
+  ln -s real.yaml lute.yaml
+  git add lute.yaml real.yaml && git commit -q -m fixture
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "47k) symlinked manifest was accepted"
+  grep -q 'regular file' out.log || die "47k) symlinked manifest error is unclear: $(cat out.log)"
+
+  mkrepo "$WORK/t47-config-symlink"
+  mkdir -p .lute
+  printf 'agent: "true"\n' > config-target.yaml
+  ln -s ../config-target.yaml .lute/config.yaml
+  printf 'loop: c\ndone_when: "true"\nbudget: 1 run\n' > lute.yaml
+  git add -A && git commit -q -m fixture
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "47k) symlinked config was accepted"
+  grep -q 'regular file' out.log || die "47k) symlinked config error is unclear: $(cat out.log)"
+
+  # --- l) protected non-ASCII paths are pinned and restored by byte-safe git plumbing.
+  mkrepo "$WORK/t47-i18n-protected"
+  mkdir -p exam
+  printf 'SECRET\n' > "exam/café.txt"
+  cat > lute.yaml <<'EOF'
+loop: i18n
+agent: "rm 'exam/café.txt'"
+task: try to delete the protected fixture
+done_when: "! grep -q SECRET 'exam/café.txt'"
+protected: ["exam/**"]
+budget: 1 run
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "47l) protected i18n file deletion forged a pass (exit $rc): $(cat out.log)"
+  git show "HEAD:exam/café.txt" | grep -q SECRET || die "47l) protected i18n file was not restored in HEAD"
+
+  # --- m) non-ASCII untracked deliverables are staged as paths, not quoted display text.
+  mkrepo "$WORK/t47-i18n-untracked"
+  mkdir -p docs
+  cat > lute.yaml <<'EOF'
+loop: i18n-out
+agent: "printf ok > 'docs/café.txt'"
+task: create the i18n file
+done_when: "grep -q ok 'docs/café.txt'"
+budget: 1 run
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "47m) non-ASCII untracked file crashed or failed staging: $(cat out.log)"
+  git show "HEAD:docs/café.txt" | grep -q ok || die "47m) non-ASCII untracked file was not committed"
+
+  # --- n) protected symlinked directories are quarantined before checks can follow them.
+  mkrepo "$WORK/t47-symlink-dir"
+  mkdir -p tests
+  cat > lute.yaml <<'EOF'
+loop: symlink-dir
+agent: "mkdir -p payload; printf '#!/bin/sh\nexit 0\n' > payload/pass.sh; chmod +x payload/pass.sh; ln -s ../payload tests/evil"
+task: smuggle a passing check through a symlinked protected directory
+done_when: "sh tests/evil/pass.sh"
+protected: ["tests/**"]
+budget: 1 run
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "47n) symlinked protected directory forged a pass (exit $rc): $(cat out.log)"
+  [ ! -L tests/evil ] || die "47n) protected symlinked directory was not removed"
+
+  # --- o) replaying the committed answered card cannot mint a fresh budget refresh.
+  mkrepo "$WORK/t47-answer-replay-card"
+  cat > agent.sh <<'SH'
+#!/bin/sh
+n=$(cat attempts 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > attempts
+[ "$n" -ge 3 ] && touch done
+SH
+  chmod +x agent.sh
+  printf 'loop: replay-card\nagent: "sh agent.sh"\ntask: t\ndone_when: "test -f done"\nbudget: 1 run\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > first.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "47o) first run should block: $(cat first.log)"
+  "$LUTE" answer replay-card "continue" > /dev/null 2>&1 || die "47o) answer failed"
+  cp INBOX/replay-card.md "$WORK/t47-answered-card.md"
+  rc=0; "$LUTE" run --plain > second.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "47o) second run should spend the single refresh: $(cat second.log)"
+  cp "$WORK/t47-answered-card.md" INBOX/replay-card.md
+  git add INBOX/replay-card.md && git commit -q -m "replay answered card"
+  rc=0; "$LUTE" run --plain > third.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "47o) replayed answered card minted fresh budget (exit $rc): $(cat third.log)"
+  [ ! -f done ] || die "47o) replayed answered card let the third agent run"
+
+  # --- p) a directory planted at a state-file path is replaced, not treated as fatal state.
+  mkrepo "$WORK/t47-ledger-dir"
+  mkdir -p .lute/ledger.jsonl
+  printf 'loop: ledger-dir\nagent: "true"\ntask: t\ndone_when: "false"\nbudget: 1 run\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "47p) ledger directory caused the wrong exit (got $rc): $(cat out.log)"
+  python3 - <<'PY' || die "47p) ledger path was not repaired to a regular file"
+import os, stat
+st = os.lstat(".lute/ledger.jsonl")
+assert stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode)
+PY
+
+  # --- q) parallel orphan reaping is cwd-gated and will not kill a recycled pid in another repo.
+  mkrepo "$WORK/t47-reap-pid"
+  cat > lute.yaml <<'EOF'
+loop: reap
+done_when: "false"
+parallel: true
+budget: 2 runs
+loops:
+  - loop: child
+    agent: "true"
+    task: t
+    done_when: "false"
+    budget: 1 run
+EOF
+  seal
+  ( cd "$WORK" && sleep 30 ) &
+  spid=$!
+  mkdir -p .lute/wt
+  printf '%s\n%s\n' "$spid" "$WORK/not-this-worktree" > .lute/wt/reap__child.pid
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  if ! kill -0 "$spid" 2>/dev/null; then die "47q) parallel reaper killed a pid outside the child worktree"; fi
+  kill "$spid" 2>/dev/null || true
+
+  # --- r) answered cards preserve CR bytes between signing and consuming.
+  mkrepo "$WORK/t47-answer-cr"
+  printf 'loop: cr\nagent: "true"\ntask: t\ndone_when: "false"\nbudget: 1 run\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > first.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "47r) first CR run should block: $(cat first.log)"
+  ans=$(printf 'line\rcarriage')
+  "$LUTE" answer cr "$ans" > /dev/null 2>&1 || die "47r) CR answer command failed"
+  rc=0; "$LUTE" run --plain > second.log 2>&1 || rc=$?
+  [ -f .lute/logs/cr.run2.log ] || die "47r) CR answer was silently discarded: $(cat second.log)"
+
+  # --- s) watch --filter degrades non-UTF8 logs instead of crashing.
+  mkrepo "$WORK/t47-watch-nonutf"
+  printf 'loop: watch\ndone_when: "true"\nbudget: 1 run\n' > lute.yaml
+  seal
+  printf 'ok\377\n' > bad.log
+  rc=0; "$LUTE" watch --filter bad.log > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "47s) watch --filter crashed on non-UTF8 bytes: $(cat out.log)"
+
+  # --- t) cron refuses managed blocks that would be split by newline-bearing input.
+  mkrepo "$WORK/t47-cron-newline"
+  cat > lute.yaml <<'EOF'
+loop: cron
+done_when: "true"
+budget: 1 run
+schedules:
+  - run: cron
+    at: "0 3 * *\n*"
+EOF
+  seal
+  bin="$WORK/t47-cron-bin"; mkdir -p "$bin"; cf="$WORK/t47-cron.txt"
+  cat > "$bin/crontab" <<CRON
+#!/bin/sh
+case "\$1" in -l) [ -f "$cf" ] && cat "$cf" || { echo "no crontab for tester" >&2; exit 1; } ;; -) cat > "$cf" ;; *) exit 2 ;; esac
+CRON
+  chmod +x "$bin/crontab"
+  rc=0; PATH="$bin:$PATH" "$LUTE" cron sync > out.log 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "47t) cron accepted a newline-bearing schedule"
+  [ ! -f "$cf" ] || ! grep -q 'BEGIN lute' "$cf" || die "47t) cron wrote a managed block for a newline-bearing schedule"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -3706,6 +4065,7 @@ desc() {
     t44) echo "quarantine     trusted exam/control edits are quarantined, inspectable, and excluded from run commits" ;;
     t45) echo "plan-dag       lute plan --dag reasons from dependencies but emits native lute.proposed.yaml; --keep-dag preserves the review artifact" ;;
     t46) echo "stated-contracts THREAT_MODEL.md states the two trust bases + named out-of-scope boundaries (README-linked); INVARIANT.md states 'the builder cannot author its own verdict' and maps each clause to a real notch (runner-linked)" ;;
+    t47) echo "host-boundary  runner state, Git, answer, plan, judge, worktree, manifest, and config hardening" ;;
   esac
 }
 
