@@ -3640,6 +3640,19 @@ t_t46() { # trust-contract: THREAT_MODEL.md states the two trust bases and the o
   grep -Eqi 'token|cost' "$TM" || die "46) threat model omits the cost/token out-of-scope note"
   # discoverable, not orphaned: a reader is pointed to the contract from the README
   grep -q 'THREAT_MODEL.md' "$ROOT/README.md" || die "46) README does not link THREAT_MODEL.md; an unlinked contract drifts"
+
+  # the core invariant is stated, and its clause->notch mapping points only at
+  # notches that actually exist (so a renamed/removed notch can't leave the claim
+  # citing a guard that is no longer there). runner.py points a code reader to it.
+  INV="$ROOT/INVARIANT.md"
+  [ -f "$INV" ] || die "46) INVARIANT.md is missing; the core claim must be stated, not implicit"
+  grep -Eqi 'cannot author its own verdict' "$INV" || die "46) INVARIANT.md does not state the invariant"
+  grep -q 'INVARIANT.md' "$ROOT/lute_core/runner.py" || die "46) runner.py does not point a code reader to INVARIANT.md"
+  cited=$(grep -oE '(^|[^A-Za-z0-9])t[0-9]+' "$INV" | grep -oE 't[0-9]+' | sort -u)
+  [ -n "$cited" ] || die "46) INVARIANT.md maps no clause to any notch"
+  for n in $cited; do
+    case " $ALL " in *" $n "*) ;; *) die "46) INVARIANT.md cites $n, which is not a real notch in ALL" ;; esac
+  done
   true
 }
 
@@ -3692,7 +3705,7 @@ desc() {
     t43) echo "uninstall      removes installer-owned tool artifacts while preserving project state" ;;
     t44) echo "quarantine     trusted exam/control edits are quarantined, inspectable, and excluded from run commits" ;;
     t45) echo "plan-dag       lute plan --dag reasons from dependencies but emits native lute.proposed.yaml; --keep-dag preserves the review artifact" ;;
-    t46) echo "trust-contract THREAT_MODEL.md states the two trust bases (exam integrity uncaged; budget-reset/gate caged) and the named out-of-scope boundaries, linked from the README" ;;
+    t46) echo "stated-contracts THREAT_MODEL.md states the two trust bases + named out-of-scope boundaries (README-linked); INVARIANT.md states 'the builder cannot author its own verdict' and maps each clause to a real notch (runner-linked)" ;;
   esac
 }
 

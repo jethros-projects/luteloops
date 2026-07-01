@@ -3,6 +3,10 @@
 The runner reads like the product: children, protection, check, budget, card,
 agent, ledger, commit, gate, close.  It uses `LoopSpec` directly and keeps all
 runtime state in `AppContext` and services.
+
+The one invariant it exists to hold — *the builder cannot author its own
+verdict* — and the map from each of its clauses to the notch that enforces it is
+stated in `INVARIANT.md`.
 """
 
 from __future__ import annotations
