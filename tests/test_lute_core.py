@@ -11,10 +11,11 @@ from unittest import mock
 
 from lute_core import cards, cli, cli_args, events, formatting, ledger, planner, processes, protection, schema
 from lute_core.cage import DEFAULT_CAGE_TEMPLATE, CageTemplate, expand_cage_template
+from lute_core.checks import CheckRunner
 from lute_core.config import freeze_config, load_config
 from lute_core.context import AppContext, Paths
 from lute_core.domain import LoopSpec, RunMode
-from lute_core.errors import Gated
+from lute_core.errors import Gated, PreconditionError
 from lute_core.git_repo import GitRepo
 from lute_core.state_store import StateStore
 
@@ -124,6 +125,16 @@ class LedgerTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_load_config_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td, "target.yaml")
+            target.write_text('agent: "true"\n')
+            link = Path(td, "config.yaml")
+            link.symlink_to(target)
+
+            with self.assertRaisesRegex(PreconditionError, "regular file"):
+                load_config(str(link))
+
     def test_parallel_child_freezes_parent_state_config_from_trusted_base(self):
         with tempfile.TemporaryDirectory() as td:
             parent = os.path.join(td, "parent")
@@ -194,7 +205,7 @@ class ProcessTests(unittest.TestCase):
             try:
                 os.chdir(td)
                 out = io.StringIO()
-                with mock.patch.object(processes, "command_contains", return_value=True), \
+                with mock.patch.object(processes, "pid_alive", return_value=True), \
                      mock.patch.object(processes, "serves_repo", return_value=True), \
                      mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
                      contextlib.redirect_stdout(out):
@@ -212,7 +223,7 @@ class ProcessTests(unittest.TestCase):
             try:
                 os.chdir(td)
                 out, err = io.StringIO(), io.StringIO()
-                with mock.patch.object(processes, "command_contains", return_value=True), \
+                with mock.patch.object(processes, "pid_alive", return_value=True), \
                      mock.patch.object(processes, "serves_repo", return_value=None), \
                      mock.patch.object(processes, "stop_run", return_value=True) as stop_run, \
                      contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -281,6 +292,34 @@ class CardAndEventTests(unittest.TestCase):
 
             self.assertEqual(git.diff_args, ("diff", "--stat", "trusted-base...HEAD"))
             self.assertIn("diffstat", svc.captured)
+
+    def test_answer_auth_binds_answer_body(self):
+        self.assertNotEqual(cards.answer_basis("READY\n", "no"), cards.answer_basis("READY\n", "approve"))
+
+
+class CheckRunnerTests(unittest.TestCase):
+    def test_judge_checks_do_not_reenter_self_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+            Path(td, "seed").write_text("x")
+            subprocess.run(["git", "add", "seed"], cwd=td, check=True)
+            subprocess.run(
+                ["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "seed"],
+                cwd=td,
+                check=True,
+            )
+            paths = Paths.for_repo(td)
+            os.makedirs(paths.state)
+            Path(paths.config).write_text('judge: "printf PASS"\n')
+            proof = Path(td, "self-ran")
+            ctx = AppContext(td, paths, load_config(paths.config), os.path.join(td, "lute.yaml"), "j", RunMode.FILE)
+            runner = CheckRunner(ctx, GitRepo(td), lambda command, repo_root=None: command, lambda: f"sh -c 'touch {proof}; false'")
+            loop = LoopSpec.from_normalized({"id": "j", "done_when": "judge: ok", "budget": []})
+
+            result = runner.run(loop)
+
+            self.assertEqual(result.verdict.value, "pass")
+            self.assertFalse(proof.exists())
 
 
 class CageTests(unittest.TestCase):
@@ -401,6 +440,20 @@ class CliAndProtectionTests(unittest.TestCase):
             finally:
                 os.chdir(old)
 
+    def test_quarantine_records_reject_symlinked_patch(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = Paths.for_repo(td)
+            store = StateStore(paths)
+            store.ensure_layout()
+            qdir = Path(paths.quarantine, "qbad")
+            qdir.mkdir()
+            Path(qdir, "meta.json").write_text(json.dumps({"id": "qbad", "patch": "changes.patch"}))
+            target = Path(td, "secret")
+            target.write_text("secret")
+            Path(qdir, "changes.patch").symlink_to(target)
+
+            self.assertEqual(cli.quarantine_records(paths), [])
+
 
 class PlannerPromptTests(unittest.TestCase):
     def test_repo_briefing_collects_bounded_planning_facts(self):
@@ -514,6 +567,20 @@ class ContextTests(unittest.TestCase):
 
             self.assertFalse(os.path.islink(path))
             self.assertEqual(Path(path).read_text(), "trusted\n")
+            self.assertEqual(Path(target).read_text(), "sentinel")
+
+    def test_process_output_replaces_symlink_leaf(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "log")
+            target = os.path.join(td, "target")
+            Path(target).write_text("sentinel")
+            os.symlink(target, path)
+
+            with processes.open_output(path, append=False) as f:
+                f.write("log\n")
+
+            self.assertFalse(os.path.islink(path))
+            self.assertEqual(Path(path).read_text(), "log\n")
             self.assertEqual(Path(target).read_text(), "sentinel")
 
     def test_app_context_carries_runtime_fields(self):
