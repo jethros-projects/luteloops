@@ -510,7 +510,9 @@ This is a different trust base from exam-pass integrity: host-side checks and
 protected exams cover ordinary uncaged runs, and Lute reaps the agent's process
 group before checking, but uncaged code is still host code and can deliberately
 daemonize outside that group. Use a real cage for adversarial containment;
-human approval and answered-card budget refresh require it.
+human approval and answered-card budget refresh require it. The full contract —
+which guarantee holds caged versus uncaged, and what is explicitly out of scope —
+is stated in [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
 Approve with `lute answer release-ready approve`; after trimming whitespace,
 the answer text must be exactly `approve` to seal. On the next run the exam is
