@@ -566,6 +566,22 @@ class CliAndProtectionTests(unittest.TestCase):
             finally:
                 os.chdir(old)
 
+    def test_unreadable_protected_file_is_flagged_not_fatal(self):
+        # chmod 000 on a watched file must not crash the runner mid-check; it
+        # must read as "changed" so quarantine restores a readable trusted copy.
+        if os.geteuid() == 0:
+            self.skipTest("root can read anything")
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "exam.txt")
+            Path(path).write_text("x")
+            os.chmod(path, 0)
+            try:
+                record = protection._current_record(path)  # must not raise
+            finally:
+                os.chmod(path, 0o644)
+            self.assertIsNotNone(record)
+            self.assertNotEqual(record.kind, "file")  # never mistaken for readable content
+
     def test_quarantine_list_diff_and_drop(self):
         with tempfile.TemporaryDirectory() as td:
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
