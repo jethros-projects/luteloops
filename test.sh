@@ -301,6 +301,32 @@ EOF
   rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "lint failed on a merely-failing (administrable) exam: $(cat lint.out)"
   grep -Eq '^pass +good-root:' lint.out || die "good-root not classified pass: $(cat lint.out)"
+
+  # circular exam: a task loop whose done_when only probes for a writable file is
+  # satisfiable by the agent typing the answer; lint warns (advice, not an error).
+  mkrepo "$WORK/t7-circular"
+  cat > lute.yaml <<EOF
+loop: circ-root
+agent: "$FAKE"
+done_when: "true"
+budget: 2 runs
+loops:
+  - loop: circular
+    task: build the thing
+    done_when: "test -f done.flag"
+  - loop: grounded
+    task: build the thing
+    done_when: "test -f done.flag"
+    protected: ["done.flag"]
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "7circ) circular-exam guard must warn, not fail lint: $(cat lint.out)"
+  grep -q 'circular: done_when only checks that done.flag exists' lint.out \
+    || die "7circ) circular exam not flagged: $(cat lint.out)"
+  grep -Eq 'grounded:.*only checks that done.flag' lint.out \
+    && die "7circ) protecting the ground-truth file should silence the circular warning: $(cat lint.out)"
+  true
 }
 
 # ---------------------------------------------------------------- T8
