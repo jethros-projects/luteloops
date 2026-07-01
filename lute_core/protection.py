@@ -61,7 +61,7 @@ def reaches_below(pattern: str, rel: str) -> bool:
     return rec(pattern.split("/"), rel.split("/"))
 
 
-def protected_files(globs: list[str]) -> list[str]:
+def protected_files(globs: list[str], boundaries: frozenset[str] | set[str] = frozenset()) -> list[str]:
     matchers = [glob_re(g) for g in globs]
     files: list[str] = []
     for root, dirs, names in os.walk("."):
@@ -70,6 +70,11 @@ def protected_files(globs: list[str]) -> list[str]:
             if name in (".git", ".lute"):
                 continue
             rel = os.path.relpath(os.path.join(root, name), ".")
+            if rel in boundaries:
+                # A recorded submodule: a separate repository, policed at its
+                # gitlink. Only baseline-recorded paths are boundaries — a dir
+                # the agent `git init`s itself is still walked and watched.
+                continue
             if os.path.islink(os.path.join(root, name)):
                 if any(m.match(rel) for m in matchers) or any(reaches_below(g, rel) for g in globs):
                     files.append(rel)
@@ -180,6 +185,14 @@ def _current_record(path: str) -> FileRecord | None:
 def _same(a: FileRecord | None, b: FileRecord | None) -> bool:
     if a is None or b is None:
         return a is None and b is None
+    if a.kind == "gitlink":
+        if b.kind == "gitlink":
+            return a.digest == b.digest  # ref-to-ref: a moved submodule pointer is a trusted change
+        # The worktree probe of a submodule sees a plain directory (initialized
+        # or not), which satisfies the gitlink. Content beneath it belongs to
+        # that other repository — outside protection's boundary by design; the
+        # pointer itself is policed ref-to-ref at merge and land.
+        return b.kind == "dir"
     return (a.kind, a.mode, a.digest) == (b.kind, b.mode, b.digest)
 
 
@@ -297,7 +310,8 @@ class Protection:
     def changed_paths(self, baseline: ProtectionBaseline) -> list[str]:
         watched = set(baseline.records) | set(baseline.watched_absent) | set(baseline.control_paths)
         if baseline.protected_globs:
-            watched |= set(protected_files(list(baseline.protected_globs)))
+            boundaries = {path for path, record in baseline.records.items() if record.kind == "gitlink"}
+            watched |= set(protected_files(list(baseline.protected_globs), boundaries))
         changed = [path for path in watched if not _same(baseline.records.get(path), _current_record(path))]
         return sorted(changed)
 
@@ -427,6 +441,8 @@ class Protection:
                 continue
             if record.source == "git":
                 self.git.restore_path(baseline.base_ref, path)
+                if record.kind == "gitlink":
+                    os.makedirs(path, exist_ok=True)  # an empty dir = an uninitialized submodule
             elif record.kind == "symlink" and record.raw is not None:
                 os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
                 os.symlink(record.raw.decode(), path)

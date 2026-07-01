@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import stat as stat_module
 import subprocess
 import tempfile
@@ -485,6 +486,49 @@ class CliAndProtectionTests(unittest.TestCase):
                 self.assertIn("planted", protection.protected_files(["**/answer.txt"]))
                 # a symlink the glob cannot reach below stays unwatched (no noise)
                 self.assertNotIn("planted", protection.protected_files(["exam/*.txt"]))
+            finally:
+                os.chdir(old)
+
+    def test_submodule_under_protected_glob_is_a_boundary_not_tamper(self):
+        # A gitlink is a repository boundary, not content: a pristine submodule
+        # must not be reported changed (the digest mismatch used to quarantine
+        # and rmtree it on every check), while replacing the submodule with
+        # plain agent-authored content must still be caught.
+        def git(*args, cwd):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                            "-c", "protocol.file.allow=always", *args], cwd=cwd, check=True, capture_output=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            dep = os.path.join(td, "dep")
+            os.makedirs(dep)
+            git("init", "-q", "-b", "main", cwd=dep)
+            Path(dep, "lib.txt").write_text("lib\n")
+            git("add", "-A", cwd=dep)
+            git("commit", "-qm", "dep", cwd=dep)
+
+            sup = os.path.join(td, "sup")
+            os.makedirs(os.path.join(sup, "exam"))
+            git("init", "-q", "-b", "main", cwd=sup)
+            Path(sup, "exam", "q.txt").write_text("q\n")
+            git("add", "-A", cwd=sup)
+            git("submodule", "add", "-q", os.path.abspath(dep), "exam/dep", cwd=sup)
+            git("commit", "-qm", "base", cwd=sup)
+
+            old = os.getcwd()
+            try:
+                os.chdir(sup)
+                repo = GitRepo(os.path.realpath(sup))
+                ctx = AppContext(repo.root, Paths.for_repo(repo.root), {}, "", "r", RunMode.FILE)
+                ctx.trusted_base = repo.head()
+                prot = protection.Protection(ctx, repo)
+                loop = LoopSpec.from_normalized({"id": "r", "done_when": "true", "budget": [], "protected": ["exam/**"]})
+                baseline = prot.baseline(loop)
+
+                self.assertEqual(prot.changed_paths(baseline), [])
+
+                shutil.rmtree("exam/dep")
+                Path("exam/dep").write_text("agent-authored\n")
+                self.assertIn("exam/dep", prot.changed_paths(baseline))
             finally:
                 os.chdir(old)
 
