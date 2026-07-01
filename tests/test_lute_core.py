@@ -179,6 +179,22 @@ class ConfigTests(unittest.TestCase):
                     signal.alarm(0)
                     signal.signal(signal.SIGALRM, old)
 
+    def test_key_creation_without_hard_links_is_exclusive_not_divergent(self):
+        # On a filesystem without hard links the fallback must claim the key path
+        # EXCLUSIVELY (O_EXCL), never with a clobbering os.replace: two processes
+        # racing through a replace would each write a different key and diverge,
+        # breaking the main/child shared-key guarantee (t40). Asserting replace
+        # is never used makes the exclusivity deterministic to check.
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as keys:
+            with mock.patch.dict(os.environ, {"LUTE_KEY_DIR": keys}), \
+                 mock.patch("os.link", side_effect=OSError("no hard links here")), \
+                 mock.patch("os.replace", side_effect=AssertionError("fallback must not clobber")):
+                first = self._authority(td).key()
+                second = self._authority(td).key()
+            self.assertRegex(first, r"\A[0-9a-f]{32}\Z")
+            self.assertEqual(first, second)
+            self.assertEqual(len(os.listdir(keys)), 1)
+
     def test_partially_written_key_is_rejected_not_trusted(self):
         # A crash between create and write used to leave an empty key file that
         # every later run silently trusted ('' forever) - a forgeable authority.
@@ -626,6 +642,27 @@ class CliAndProtectionTests(unittest.TestCase):
         prot = protection.Protection(ctx, repo)
         loop = LoopSpec.from_normalized({"id": "r", "done_when": "true", "budget": [], "protected": globs})
         return prot, prot.baseline(loop)
+
+    def test_submodule_probe_is_bounded_and_fails_closed_when_wedged(self):
+        # git runs inside an agent-controlled submodule directory; a probe that
+        # hangs (a FIFO HEAD, an [include]->FIFO in config) must not wedge the
+        # runner. A timed-out probe is 'not a clean submodule' — flagged, never
+        # a hang.
+        import subprocess as sp
+        with tempfile.TemporaryDirectory() as td:
+            sub = os.path.join(td, "sub")
+            os.makedirs(sub)
+            Path(sub, ".git").write_text("gitdir: elsewhere\n")
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                with mock.patch.object(protection.subprocess, "run",
+                                       side_effect=sp.TimeoutExpired("git", 10)):
+                    record = protection._current_record("sub")
+                self.assertIsNotNone(record)
+                self.assertNotEqual(record.kind, "gitlink")  # a wedged probe is a change, not pristine
+            finally:
+                os.chdir(old)
 
     def test_pristine_submodule_is_a_boundary_not_tamper(self):
         # A pristine submodule (deep OR root-mounted under the glob) is a
