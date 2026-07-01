@@ -643,24 +643,38 @@ class CliAndProtectionTests(unittest.TestCase):
                     os.chdir(old)
 
     def test_forged_content_behind_a_submodule_boundary_is_caught(self):
-        # The boundary must stay fail-CLOSED: replacing the submodule with a
-        # plain directory of agent-authored content (the classic buy-a-pass when
-        # done_when reads inside it) is a change, restored before the check.
-        with tempfile.TemporaryDirectory() as td:
-            sup = self._superproject(td, "exam/dep")
-            old = os.getcwd()
-            try:
-                os.chdir(sup)
-                prot, baseline = self._protection_for(sup, ["exam/**"])
-                shutil.rmtree("exam/dep")
-                os.makedirs("exam/dep")
-                Path("exam/dep/grader.sh").write_text("#!/bin/sh\nexit 0\n")
-                Path("exam/dep/answer").write_text("42\n")
-                self.assertIn("exam/dep", prot.changed_paths(baseline))
-                prot.enforce("r", "run1", baseline)
-                self.assertFalse(os.path.exists("exam/dep/grader.sh"), "forged content survived restore")
-            finally:
-                os.chdir(old)
+        # The boundary must stay fail-CLOSED against both a plain-directory
+        # replacement AND a gitdir-pointer forgery (keep .git pointing at the
+        # real module store so rev-parse still returns the recorded commit,
+        # but forge a tracked exam file). Both are the classic buy-a-pass when
+        # done_when reads inside the mount; both must be caught and restored.
+        for label, forge in (("plain-dir", self._forge_plain_dir), ("gitdir-pointer", self._forge_gitdir_pointer)):
+            with tempfile.TemporaryDirectory() as td:
+                sup = self._superproject(td, "exam/dep")
+                old = os.getcwd()
+                try:
+                    os.chdir(sup)
+                    prot, baseline = self._protection_for(sup, ["exam/**"])
+                    forge()
+                    self.assertIn("exam/dep", prot.changed_paths(baseline), label)
+                    prot.enforce("r", "run1", baseline)
+                    self.assertNotIn("exam/dep", prot.changed_paths(prot.baseline(
+                        LoopSpec.from_normalized({"id": "r", "done_when": "true", "budget": [], "protected": ["exam/**"]})
+                    )), f"{label}: not restored to a pristine boundary")
+                finally:
+                    os.chdir(old)
+
+    @staticmethod
+    def _forge_plain_dir():
+        shutil.rmtree("exam/dep")
+        os.makedirs("exam/dep")
+        Path("exam/dep/grader.sh").write_text("#!/bin/sh\nexit 0\n")
+
+    @staticmethod
+    def _forge_gitdir_pointer():
+        # keep the real submodule .git (rev-parse HEAD stays the recorded commit)
+        # but overwrite a tracked exam file in the working tree
+        Path("exam/dep/grader.sh").write_text("#!/bin/sh\nexit 0\n")
 
     def test_unreadable_protected_file_is_flagged_not_fatal(self):
         # chmod 000 on a watched file must not crash the runner mid-check; it
