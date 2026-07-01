@@ -41,16 +41,21 @@ def land(
     try:
         git.text("checkout", "-q", target)
         pre = git.head()
-        trusted_base = git.text("merge-base", target, branch).strip()
-        runner.ctx.trusted_base = trusted_base
-        baseline = runner.protection.baseline(root)
-        branch_trusted_changes = runner.protection.changed_paths_at_ref(baseline, branch)
+        # Two audits, two trusted bases. The BRANCH is audited against the fork
+        # point: did the lute run touch exam/control material? The MERGED TREE
+        # is audited against the target's tip: the target's own post-fork edits
+        # to protected material are its trusted truth, not tampering.
+        runner.ctx.trusted_base = git.text("merge-base", target, branch).strip()
+        fork_baseline = runner.protection.baseline(root)
+        branch_trusted_changes = runner.protection.changed_paths_at_ref(fork_baseline, branch)
         if branch_trusted_changes:
             block(
                 f"{branch} modifies trusted exam/control material and was not landed: "
                 + ", ".join(branch_trusted_changes)
                 + ". Inspect quarantines with: lute quarantine list"
             )
+        runner.ctx.trusted_base = pre
+        baseline = runner.protection.baseline(root)
         merge = git.merge("--no-ff", "--no-edit", branch, check=False)
         if merge.returncode:
             git.ok("merge", "--abort")

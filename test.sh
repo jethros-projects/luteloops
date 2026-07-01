@@ -2747,6 +2747,28 @@ EOF
   rc=0; "$LUTE" land > l.out 2>&1 || rc=$?
   [ "$rc" -ne 0 ] || die "35d) land with no branch exited 0"
   grep -q 'no lute/nope branch' l.out || die "35d) wrong no-branch message: $(cat l.out)"
+
+  # --- e) the target's own post-fork edits to protected material are ITS trusted
+  #        truth, not tampering: the branch is audited against the fork point, but
+  #        the merged tree is audited against the target's tip.
+  mkrepo "$WORK/t35e"
+  printf 'v1\n' > exam.txt
+  cat > lute.yaml <<'EOF'
+loop: adv
+agent: "touch made.txt"
+task: t
+done_when: "test -f made.txt"
+protected: ["exam.txt"]
+budget: 2 runs
+EOF
+  seal
+  "$LUTE" run --plain > /dev/null 2>&1 || die "35e) run failed"
+  git checkout -q main
+  printf 'v2\n' > exam.txt && git commit -q -am "human advances the protected exam on main"
+  rc=0; "$LUTE" land > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "35e) land blocked the target's own trusted edits (exit $rc): $(cat l.out)"
+  grep -q 'v2' exam.txt || die "35e) landed tree lost the target's exam version"
+  [ -f made.txt ] || die "35e) landed tree lacks the branch work"
 }
 
 # ---------------------------------------------------------------- T36
