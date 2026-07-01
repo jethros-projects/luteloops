@@ -9,12 +9,17 @@ import hashlib
 from .config import AnswerAuthority
 from .context import AppContext
 from .domain import Card, LoopSpec
-from .errors import Blocked, Gated
+from .errors import Blocked, Gated, UsageError
 from .events import EventBus, now_iso
 from .formatting import human, tail
 from .git_repo import GitRepo
 from .ledger import runs_since_authenticated_answer
+from .schema import ID_RE
 from .state_store import StateStore
+
+
+def answer_basis(prefix: str, answer: str) -> str:
+    return hashlib.sha256((prefix + "\nANSWER: " + answer).encode()).hexdigest()
 
 
 def summarize_card(lid: str, text: str) -> Card:
@@ -52,7 +57,9 @@ class CardService:
         self.fire_halt = fire_halt
 
     def path(self, loop_id: str) -> str:
-        return os.path.join(self.ctx.paths.inbox, f"{loop_id}.md")
+        if not ID_RE.fullmatch(str(loop_id)):
+            raise UsageError(f"loop id must be kebab-case, got {loop_id!r}")
+        return self.store.child_path(self.ctx.paths.inbox, f"{loop_id}.md")
 
     def open_cards(self) -> list[dict[str, object]]:
         self.store.ensure_dir(self.ctx.paths.inbox)
@@ -79,15 +86,15 @@ class CardService:
         path = self.path(lid)
         if not self.store.is_regular_file(path):
             return None
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
+        text = self.store.read_text(path)
         marker = text.rfind("\nANSWER: ")
         if marker < 0:
             return None
         body = text[marker + len("\nANSWER: "):]
         match = re.search(r"\nANSWER-AUTH: (\S+)\s*$", body)
-        answer = (body[:match.start()] if match else body).strip()
-        basis = hashlib.sha256(text[:marker].encode()).hexdigest()
+        answer_raw = body[:match.start()] if match else body
+        answer = answer_raw.strip()
+        basis = answer_basis(text[:marker], answer_raw)
         genuine = bool(match) and self.authority.valid(lid, basis, match.group(1))
         self.store.remove_runner_file(path)
         if not genuine:
@@ -95,7 +102,7 @@ class CardService:
                 self.git.shared_text(self.ctx.shared_root, "add", "-A", "--", path)
                 self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): card cleared")
             return None
-        nonce = os.urandom(8).hex()
+        nonce = basis
         self.ledger_append({"ts": now_iso(), "loop": lid, "event": "answer", "n": nonce, "auth": self.authority.token(lid, nonce)})
         self.git.shared_text(self.ctx.shared_root, "add", "--", self.ctx.paths.ledger)
         if self.git.ok("ls-files", "--error-unmatch", "--", path, cwd=self.ctx.shared_root):
@@ -108,8 +115,7 @@ class CardService:
         if not self.store.is_regular_file(path):
             have = sorted(f[:-3] for f in os.listdir(self.ctx.paths.inbox)) if os.path.isdir(self.ctx.paths.inbox) else []
             return f"no escalation card at {path}" + (f"; open cards: {', '.join(have)}" if have else "; no open cards")
-        with open(path, "rb") as f:
-            basis = hashlib.sha256(f.read()).hexdigest()
+        basis = answer_basis(self.store.read_text(path), text)
         token = self.authority.token(loop_id, basis)
         self.store.append_text(path, f"\nANSWER: {text}\nANSWER-AUTH: {token}\n")
         self.git.shared_text(self.ctx.shared_root, "add", path)
@@ -141,7 +147,7 @@ class CardService:
         lid = str(loop.id)
         runs, secs = runs_since_authenticated_answer(self.ledger_entries(), lid, self.authority.token)
         journal = os.path.join(self.ctx.paths.journal, f"{lid}.md")
-        jtail = tail(open(journal).read(), 5) if os.path.exists(journal) else "(no journal yet)"
+        jtail = tail(self.store.read_text(journal), 5) if self.store.is_regular_file(journal) else "(no journal yet)"
         text = (
             f"BLOCKED: needs input after {runs} run{'s' if runs != 1 else ''} · {human(secs)}\n"
             + (note + "\n" if note else "")
@@ -155,14 +161,14 @@ class CardService:
 
     def supersede(self, loop_id: str, approved: bool) -> None:
         path = self.path(loop_id)
-        text = open(path).read() if self.store.is_regular_file(path) else ""
+        text = self.store.read_text(path)
         if (approved or "READY" in text) and "SUPERSEDED" not in text:
             self.store.safe_write_regular(path, text + "SUPERSEDED: exam no longer passes\n")
 
     def gate_halt(self, loop: LoopSpec) -> None:
         lid = str(loop.id)
         path = self.path(lid)
-        text = open(path).read() if self.store.is_regular_file(path) else ""
+        text = self.store.read_text(path)
         if not re.search(r"^READY", text, re.M):
             base = self.ctx.trusted_base or self.git.branch_base()
             diffstat = self.git.text("diff", "--stat", base + "...HEAD")

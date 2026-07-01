@@ -29,7 +29,7 @@ from .errors import Blocked, Gated, PreconditionError, UsageError
 from .events import EventBus, now_iso
 from .formatting import human
 from .git_repo import GitRepo
-from .ledger import append_entry, ledger_totals, read_entries, restore_if_changed, snapshot, total_runs
+from .ledger import append_entry, is_authenticated_entry, read_entries, run_basis, snapshot, total_runs
 from . import processes
 from .protection import Protection
 from .state_store import StateStore
@@ -268,21 +268,44 @@ class Runner:
             os.path.join(self.ctx.paths.logs, f"{loop_id}.run{run_number}.log"),
         )
         self.events.emit("agent_end", loop_id, run=run_number, exit=returncode, secs=duration)
-        current_branch = self.git.current_branch()
-        if current_branch != expected_branch:
-            self.git.force_branch(expected_branch, pre_agent_head)
-            self.git.text("checkout", "-q", "-f", expected_branch)
-            restore_if_changed(self.ctx.paths.state, self.ctx.paths.ledger, trusted)
-            self.cards.escalate(
-                loop,
-                f"agent left branch {expected_branch} on {current_branch}; runner restored {expected_branch}",
-            )
-        self.git.rewind_commits_keep_worktree(pre_agent_head)
-        restore_if_changed(self.ctx.paths.state, self.ctx.paths.ledger, trusted)
-        self.enforce_quarantine(loop, f"run{run_number}", baseline)
-        self.ledger_append({"ts": now_iso(), "loop": loop_id, "run": run_number, "duration": duration, "exit": returncode})
-        self.git.stage_run_work(self.ctx.run_pre_untracked, self.ctx.quarantined_paths)
-        self.git.commit(f"lute({loop_id}): run {run_number}", allow_empty=True)
+        with self.store.locked():
+            current_branch = self.git.current_branch()
+            if current_branch != expected_branch:
+                self.git.force_branch(expected_branch, pre_agent_head)
+                self.git.text("checkout", "-q", "-f", expected_branch)
+                self.restore_ledger_after_agent(trusted)
+                self.cards.escalate(
+                    loop,
+                    f"agent left branch {expected_branch} on {current_branch}; runner restored {expected_branch}",
+                )
+            self.git.rewind_commits_keep_worktree(pre_agent_head)
+            self.restore_ledger_after_agent(trusted)
+            self.enforce_quarantine(loop, f"run{run_number}", baseline)
+            entry = {"ts": now_iso(), "loop": loop_id, "run": run_number, "duration": duration, "exit": returncode}
+            entry["auth"] = self.authority.token(loop_id, run_basis(entry))
+            self.ledger_append(entry)
+            self.git.stage_run_work(self.ctx.run_pre_untracked, self.ctx.quarantined_paths)
+            self.git.commit(f"lute({loop_id}): run {run_number}", allow_empty=True)
+
+    def restore_ledger_after_agent(self, trusted) -> None:
+        current = snapshot(self.ctx.paths.ledger)
+        if current.raw == trusted.raw:
+            return
+        trusted_keys = {json.dumps(entry, sort_keys=True, separators=(",", ":")) for entry in trusted.entries}
+        preserved = [
+            entry for entry in current.entries
+            if json.dumps(entry, sort_keys=True, separators=(",", ":")) not in trusted_keys
+            and is_authenticated_entry(entry, self.authority.token)
+        ]
+        raw = trusted.raw or b""
+        if preserved:
+            if raw and not raw.endswith(b"\n"):
+                raw += b"\n"
+            raw += b"".join((json.dumps(entry) + "\n").encode() for entry in preserved)
+        if raw:
+            self.store.safe_write_regular(self.ctx.paths.ledger, raw)
+        else:
+            self.store.remove_runner_file(self.ctx.paths.ledger)
 
     def enforce_quarantine(self, loop: LoopSpec, run_id: str, baseline):
         result = self.protection.enforce(str(loop.id), run_id, baseline)
@@ -400,10 +423,6 @@ class Runner:
         except (ValueError, OSError):
             return None
         return info if processes.pid_alive(info.get("pid")) else None
-
-    def ledger_totals(self) -> tuple[int, float]:
-        return ledger_totals(self.ledger_entries())
-
 
 def resolved_loop(root: LoopSpec, loop_id: str | None, child_mode: bool) -> LoopSpec:
     if not loop_id or loop_id == str(root.id):

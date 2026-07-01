@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import hmac
 from dataclasses import dataclass
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -22,6 +23,10 @@ AnswerAuth = Callable[[str, str], str]
 class LedgerSnapshot:
     raw: bytes | None
     entries: list[dict[str, Any]]
+
+
+def secure_equal(actual: Any, expected: str) -> bool:
+    return isinstance(actual, str) and hmac.compare_digest(actual.encode(), expected.encode())
 
 
 def _parse_jsonl_lines(lines: Iterable[str]) -> list[dict[str, Any]]:
@@ -70,7 +75,26 @@ def is_authenticated_answer(entry: dict[str, Any], lid: str, answer_auth: Answer
         return False
     nonce = entry.get("n", "")
     auth = entry.get("auth")
-    return bool(auth) and auth == answer_auth(lid, nonce)
+    return secure_equal(auth, answer_auth(lid, str(nonce)))
+
+
+def run_basis(entry: dict[str, Any]) -> str:
+    data = {"run": entry.get("run"), "duration": entry.get("duration"), "exit": entry.get("exit")}
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+def is_authenticated_run(entry: dict[str, Any], answer_auth: AnswerAuth) -> bool:
+    lid = entry.get("loop")
+    auth = entry.get("auth")
+    return isinstance(lid, str) and "run" in entry and secure_equal(auth, answer_auth(lid, run_basis(entry)))
+
+
+def is_authenticated_entry(entry: dict[str, Any], answer_auth: AnswerAuth) -> bool:
+    lid = entry.get("loop")
+    return (
+        isinstance(lid, str)
+        and is_authenticated_answer(entry, lid, answer_auth)
+    ) or is_authenticated_run(entry, answer_auth)
 
 
 def trusted_duration(entry: dict[str, Any]) -> float:
