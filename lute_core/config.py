@@ -76,10 +76,19 @@ class AnswerAuthority:
                     os.link(tmp, path)
                 except FileExistsError:
                     pass
+                except OSError:
+                    # A filesystem without hard links (FAT/exFAT, some SMB/NFS):
+                    # fall back to an atomic rename — slightly less exclusive under
+                    # a concurrent first run, but every reader still sees a whole key.
+                    if not os.path.lexists(path):
+                        os.replace(tmp, path)
                 finally:
-                    os.remove(tmp)
+                    if os.path.lexists(tmp):
+                        os.remove(tmp)
+            # O_NONBLOCK so a non-regular node (a planted FIFO) cannot make this
+            # open() block waiting for a writer; fstat below then rejects it.
             try:
-                fd = os.open(path, os.O_RDONLY | (getattr(os, "O_NOFOLLOW", 0)))
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (getattr(os, "O_NOFOLLOW", 0)))
             except OSError as exc:
                 raise PreconditionError(f"{path} must be a regular key file") from exc
             try:
