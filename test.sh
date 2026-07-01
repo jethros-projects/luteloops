@@ -3566,6 +3566,33 @@ EOF
   git show HEAD:child.done >/dev/null 2>&1 || die "44f) child product file did not merge"
   "$LUTE" quarantine > q.out 2>&1 || die "44f) quarantine list failed: $(cat q.out)"
   grep -q 'kid.run1' q.out || die "44f) child quarantine not visible in shared state: $(cat q.out)"
+
+  # --- g) a symlink that could CONCEAL protected content is quarantined even when its
+  #        own name matches no glob: the walk cannot see beneath it, and the check
+  #        would happily read forged exam material through it.
+  mkrepo "$WORK/t44g"
+  outside="$WORK/t44g-outside"; mkdir -p "$outside"
+  printf 'GENUINE\n' > "$outside/answer.txt"   # agent-controlled content outside the repo
+  mkdir -p exam
+  printf 'GENUINE\n' > exam/answer.txt
+  cat > cheat.sh <<SH
+#!/bin/sh
+[ -h exam/sub ] || ln -s "$outside" exam/sub
+SH
+  cat > lute.yaml <<'EOF'
+loop: sneak
+agent: "sh cheat.sh"
+task: t
+done_when: "grep -q GENUINE exam/sub/answer.txt"
+protected: ["**/answer.txt"]
+budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "44g) content smuggled behind a symlink bought a pass (exit $rc): $(cat out.log)"
+  [ ! -h exam/sub ] || die "44g) the planted symlink survived quarantine"
+  "$LUTE" quarantine > q.out 2>&1 || die "44g) quarantine list failed: $(cat q.out)"
+  grep -q 'exam/sub' q.out || die "44g) planted symlink not in quarantine records: $(cat q.out)"
 }
 
 # ---------------------------------------------------------------- T45
