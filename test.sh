@@ -2556,6 +2556,34 @@ EOF
       sleep 0.1
     done
   done
+
+  # --- k) stop identity survives a cron-shaped PATH. Cron ticks run with a
+  #        minimal environment; on a host whose cwd probe needs lsof (macOS,
+  #        /usr/sbin), stop must still positively identify the runner instead
+  #        of degrading to "could not confirm". Only python3 + git ride along.
+  mkrepo "$WORK/t32k"
+  bin="$WORK/t32k-bin"; mkdir -p "$bin"
+  ln -sf "$(command -v python3)" "$bin/python3"
+  ln -sf "$(command -v git)" "$bin/git"
+  cat > lute.yaml <<EOF
+loop: cron-stop
+agent: "$FAKE"
+task: t
+done_when: "false"
+budget: 50 runs
+EOF
+  cat > playbook.json <<'EOF'
+{ "cron-stop": { "1": [ {"trap_sleep": {"seconds": 30, "pid": "agent.pid"}} ] } }
+EOF
+  seal
+  PATH="$bin:/usr/bin:/bin" "$LUTE" run --bg > bg.out 2>&1
+  pid=$(grep -o 'pid [0-9][0-9]*' bg.out | grep -o '[0-9][0-9]*')
+  [ -n "$pid" ] || die "32k) no bg pid: $(cat bg.out)"
+  i=0; while [ ! -f agent.pid ]; do i=$((i+1)); [ "$i" -gt 100 ] && die "32k) agent never started under minimal PATH"; sleep 0.1; done
+  rc=0; PATH="$bin:/usr/bin:/bin" "$LUTE" stop > stop.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "32k) stop under minimal PATH exited $rc: $(cat stop.out)"
+  grep -q "stopped run pid $pid" stop.out || die "32k) stop didn't identify the runner under minimal PATH: $(cat stop.out)"
+  i=0; while kill -0 "$pid" 2>/dev/null; do i=$((i+1)); [ "$i" -gt 60 ] && die "32k) run still alive after stop"; sleep 0.1; done
 }
 
 # ---------------------------------------------------------------- T33
