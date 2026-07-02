@@ -25,7 +25,7 @@ import io
 from pathlib import Path
 from unittest import mock
 
-from lute_core import cards, cli, cli_args, events, formatting, ledger, parallel, planner, processes, protection, schema
+from lute_core import cards, cli, cli_args, events, formatting, ledger, linting, parallel, planner, processes, protection, schema
 from lute_core.cage import DEFAULT_CAGE_TEMPLATE, CageTemplate, expand_cage_template
 from lute_core.checks import CheckRunner
 from lute_core.config import AnswerAuthority, freeze_config, load_config
@@ -811,6 +811,77 @@ class CliAndProtectionTests(unittest.TestCase):
             self.assertEqual(cli.quarantine_records(paths), [])
 
 
+class LintCheckPathTests(unittest.TestCase):
+    """local_check_paths and unresolvable_heads read compound commands the way
+    a shell does: per segment, never across && / || / ; / | operators."""
+
+    def test_local_check_paths_stops_at_shell_operators(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                Path("tests").mkdir()
+                Path("tests/run.js").write_text("ok\n")
+                Path("src").mkdir()
+                Path("src/tax.ts").write_text("export {}\n")
+                paths = linting.local_check_paths("node tests/run.js && grep -q TAX_RATE src/tax.ts")
+            finally:
+                os.chdir(old)
+        # node's script is a check file; the grep operand after && is not.
+        self.assertEqual(paths, ["tests/run.js"])
+
+    def test_local_check_paths_classifies_every_segment(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                Path("package.json").write_text("{}")
+                Path("checks").mkdir()
+                Path("checks/x.sh").write_text("exit 0\n")
+                paths = linting.local_check_paths("npm test && sh checks/x.sh")
+            finally:
+                os.chdir(old)
+        self.assertEqual(paths, ["checks/x.sh", "package.json"])
+
+    def test_read_only_registry_subcommands_are_exempt(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                Path("package.json").write_text("{}")
+                self.assertEqual(linting.local_check_paths("npm view mypkg version"), [])
+                self.assertEqual(linting.local_check_paths("npm test"), ["package.json"])
+            finally:
+                os.chdir(old)
+
+    def test_unresolvable_heads_names_missing_tools_per_segment(self):
+        missing = linting.unresolvable_heads("true && definitely-not-a-real-tool-xyz --check")
+        self.assertEqual(missing, ["definitely-not-a-real-tool-xyz"])
+
+    def test_unresolvable_heads_never_flags_shell_syntax(self):
+        for command in (
+            "! grep -rn PAT src/",
+            "test -d src && ! grep -rn PAT src/",
+            "FOO=1 true",
+            "for f in a b; do true; done",
+            '(true) || { true; }',
+            "$RUNNER --flag",
+        ):
+            self.assertEqual(linting.unresolvable_heads(command), [], command)
+
+    def test_unresolvable_heads_checks_path_heads_for_existence(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                Path("checks").mkdir()
+                Path("checks/real.sh").write_text("exit 0\n")
+                self.assertEqual(linting.unresolvable_heads("./checks/real.sh"), [])
+                self.assertEqual(linting.unresolvable_heads("./checks/ghost.sh"), ["./checks/ghost.sh"])
+            finally:
+                os.chdir(old)
+
+
 class PlannerPromptTests(unittest.TestCase):
     def test_repo_briefing_collects_bounded_planning_facts(self):
         with tempfile.TemporaryDirectory() as td:
@@ -838,6 +909,54 @@ class PlannerPromptTests(unittest.TestCase):
         self.assertIn("tests/test_report_export.py", briefing)
         self.assertIn("src/report_export.py", briefing)
         self.assertIn("Protect tests when they define the exam.", briefing)
+
+    def test_briefing_check_matching_uses_word_boundaries(self):
+        files = ["src/checkout.ts", "scripts/check-foo.sh", "tests/test_a.py", "src/health_check.py"]
+        found = planner._test_and_check_files(files)
+        self.assertNotIn("src/checkout.ts", found)
+        self.assertIn("scripts/check-foo.sh", found)
+        self.assertIn("tests/test_a.py", found)
+        self.assertIn("src/health_check.py", found)
+
+    def test_briefing_labels_untracked_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                Path("tracked.py").write_text("x\n")
+                subprocess.run(["git", "add", "-A"], cwd=td, check=True)
+                subprocess.run(
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "f"],
+                    cwd=td, check=True,
+                )
+                Path("scratch.py").write_text("y\n")
+                briefing = planner.repo_briefing("do a thing", GitRepo(td))
+            finally:
+                os.chdir(old)
+        self.assertIn("scratch.py (untracked)", briefing)
+        self.assertIn("- tracked.py", briefing)
+        self.assertNotIn("tracked.py (untracked)", briefing)
+
+    def test_briefing_cross_references_missing_test_runner(self):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+            old = os.getcwd()
+            try:
+                os.chdir(td)
+                Path("tests").mkdir()
+                Path("tests/test_a.py").write_text("x\n")
+                briefing = planner.repo_briefing("fix the tests", GitRepo(td))
+            finally:
+                os.chdir(old)
+        self.assertIn("no test command detected", briefing.lower())
+
+    def test_goal_framework_tokens_match_extension_families(self):
+        files = ["src/app.jsx", "src/view.tsx", "src/main.go"]
+        found = planner._goal_related_files("upgrade this repo to React 19", files)
+        self.assertIn("src/app.jsx", found)
+        self.assertIn("src/view.tsx", found)
+        self.assertNotIn("src/main.go", found)
 
     def test_build_plan_task_wraps_goal_context_and_guardrails(self):
         task = planner.build_plan_task(
