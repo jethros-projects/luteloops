@@ -16,7 +16,9 @@
 # deprecations loop if your suite is not warning-clean yet and file it as
 # follow-up work instead.
 loop: django-major
-agent: claude -p --dangerously-skip-permissions
+# agent: set your engine here (or pass --agent); it needs command
+# rights, not just edit rights - see "Engine rights" above. e.g.:
+# agent: claude -p --dangerously-skip-permissions
 budget: 48h
 done_when: "python -m pip install -q -e . && python -m pytest -q"
 protected: ["tests/**", "checks/**"]

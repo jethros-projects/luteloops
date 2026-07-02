@@ -35,10 +35,12 @@ flow, CI wiring, landing — is `docs/UPGRADE-BOT.md`.
 
 ## Engine rights
 
-Every recipe's agent must run package managers, so the examples use full
-command rights (`claude -p --dangerously-skip-permissions`), which belongs
-inside `cage: docker`. Swap in any engine that reads stdin and can edit and
-run commands — `codex exec --sandbox workspace-write` works when the job
+Recipes ship with no `agent:` pinned — the exam is the recipe's value and the
+engine is yours. Set one (uncomment the `agent:` line, pass `--agent`, or set
+it in `.lute/config.yaml`) with the rights the job needs: every recipe here
+must run a package manager, so an edits-only mode is not enough. Full command
+rights (`claude -p --dangerously-skip-permissions`) belong inside
+`cage: docker`; `codex exec --sandbox workspace-write` works when the job
 needs no network beyond what its sandbox allows. The README's *engine
 gotchas* section is the contract.
 
