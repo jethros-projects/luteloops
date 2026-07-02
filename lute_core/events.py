@@ -65,7 +65,8 @@ def plain_line(event: dict[str, Any]) -> str | None:
             "parallel": f"‖ {lid}: {len(event.get('children', []))} children in parallel: {', '.join(event.get('children', []))}",
             "check": check,
             "agent_start": f"↻ {lid} run {event.get('run')}{'/' + str(event['cap']) if event.get('cap') else ''} → {event.get('log')}",
-            "agent_end": f"↳ {lid} run {event.get('run')} exit {event.get('exit')} · {event.get('secs')}s",
+            "agent_end": f"↳ {lid} run {event.get('run')} exit {event.get('exit')} · {event.get('secs')}s"
+            + (" · no edits" if event.get("edits") is False else ""),
             "loop_closed": f"✔ {lid} closed",
             "gated": f"✋ {lid}: ready: approve: lute answer {lid} approve  ({event.get('card')})",
             "escalated": f'✗ {lid} blocked: answer: lute answer {lid} "..."  ({event.get("card")})',

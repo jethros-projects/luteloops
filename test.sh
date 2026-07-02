@@ -4126,8 +4126,54 @@ EOF
   fi
 }
 
+# ---------------------------------------------------------------- T49
+t_t49() { # no-edit runs are loud: an agent that changes nothing is named in the
+          # event stream, on the console line, and (after 2 in a row) on the card -
+          # the misconfigured-engine failure mode (interactive CLI, missing
+          # permission flags) must never burn a budget silently
+  # --- a) an idle agent: every run records edits: false; console says "no edits";
+  #        the escalation card asks the one question that matters
+  mkrepo "$WORK/t49a"
+  cat > lute.yaml <<'EOF'
+loop: idle-agent
+agent: "true"
+task: Fix something (this engine reads nothing and edits nothing).
+done_when: "test -f out.txt"
+budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "49a) run exited $rc, want 3 (blocked): $(cat run.out)"
+  [ "$(grep -c '"edits": false' .lute/events.jsonl)" -eq 2 ] \
+    || die "49a) agent_end events do not record both no-edit runs"
+  grep -q 'no edits' run.out || die "49a) console line does not say no edits"
+  grep -q 'no edits' INBOX/idle-agent.md \
+    || die "49a) card does not name the no-edit runs (silent burn)"
+  grep -qi 'non-interactive' INBOX/idle-agent.md \
+    || die "49a) card does not ask whether the agent command is non-interactive"
+
+  # --- b) an agent that edits: no false positive, in events or on the console
+  mkrepo "$WORK/t49b"
+  cat > lute.yaml <<'EOF'
+loop: busy-agent
+agent: "touch out.txt"
+task: t
+done_when: "test -f out.txt"
+budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "49b) run exited $rc, want 0: $(cat run.out)"
+  if grep -q '"edits": false' .lute/events.jsonl; then
+    die "49b) a run that edited the tree was flagged as no-edit"
+  fi
+  if grep -q 'no edits' run.out; then
+    die "49b) console flags no-edit on a run that edited"
+  fi
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4178,6 +4224,7 @@ desc() {
     t46) echo "stated-contracts THREAT_MODEL.md states the two trust bases + named out-of-scope boundaries (README-linked); INVARIANT.md states 'the builder cannot author its own verdict' and maps each clause to a real notch (runner-linked)" ;;
     t47) echo "host-boundary  runner state, Git, answer, plan, judge, worktree, manifest, and config hardening" ;;
     t48) echo "ledger-locality run accounting is committed per branch (children own their ledger, merged like work); no flock artifact created or committed" ;;
+    t49) echo "no-edit runs   an agent that changes nothing is named in events, console, and card; a run that edits is never flagged" ;;
   esac
 }
 
