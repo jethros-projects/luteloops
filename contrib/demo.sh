@@ -10,7 +10,7 @@
 #
 # Usage:  contrib/demo.sh            run the showcase (pauses for narration on a TTY)
 #         contrib/demo.sh -y         no pauses - straight through
-#         LUTE_DEMO_AGENT='claude -p' contrib/demo.sh    swap the engine
+#         LUTE_DEMO_AGENT='claude -p --permission-mode acceptEdits' contrib/demo.sh    swap the engine
 #
 # Re-runnable: each run rigs a fresh repo in its own temp dir and prints the
 # path, so you can poke at the commits and diffs codex made afterwards.

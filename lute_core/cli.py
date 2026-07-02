@@ -421,11 +421,13 @@ def cmd_init(args: list[str]) -> int:
     with open("lute.yaml", "w", encoding="utf-8") as f:
         f.write("# lute.yaml - a luteloops file: turtles all the way down for the lute runner (see\n"
                 "# README.md and the packaged luteloops skill for how to decompose a goal).\n"
-                "loop: my-goal\n# agent: claude -p\n"
+                "loop: my-goal\n"
+                "# agent: codex exec --sandbox workspace-write\n"
+                "# agent: claude -p --permission-mode acceptEdits\n"
                 "task: Replace me with instructions for one agent iteration.\n"
                 'done_when: "false"\nbudget: 10 runs\n')
     if not store.is_regular_file(ctx.paths.config):
-        store.safe_write_regular(ctx.paths.config, "# lute config\n# agent: claude -p\n# judge: codex exec\n# cage: docker\n")
+        store.safe_write_regular(ctx.paths.config, "# lute config\n# agent: codex exec --sandbox workspace-write\n# judge: claude -p\n# cage: docker\n")
     print("initialized lute.yaml and .lute/; set an agent (uncomment agent:, or use --agent / config), replace the task: and done_when: lines, then: lute lint")
     return 0
 
