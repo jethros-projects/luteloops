@@ -45,7 +45,7 @@ from .watch import render_filtered, render_json, render_snapshot
 VERSION = f"lute {__version__}"
 SKILL_PATH = "luteloops/SKILL.md"
 SKILLS = (SKILL_PATH,)
-PLAN_PROTECTED = ("lute", "lute_core/**", SKILL_PATH)
+PLAN_PROTECTED = ("lute", "lute.yaml", "lute_core/**", SKILL_PATH)
 
 USAGE = """\
 lute: a while-loop for agents
@@ -373,12 +373,14 @@ def cmd_lint(args: list[str]) -> int:
     ctx, git, store, runner = make_runtime()
     path = pos[0] if pos else default_file()
     if not os.path.exists(path):
+        if path.endswith(".proposed.yaml"):
+            raise PreconditionError(f"no {path} here yet; drafting it is the task — write {path} for the goal, then lint again")
         raise PreconditionError(f'no {path} here; scaffold one: lute init   (or draft it: lute plan "<goal>")')
     path = trusted_file(path, "manifest", ctx.shared_root)
     root, schedules, errors = schema.load(path)
-    warnings, counts = [], {"pass": 0, "fail": 0, "error": 0, "not_yet": 0, "skipped": 0}
+    warnings, notes, counts = [], [], {"pass": 0, "fail": 0, "error": 0, "not_yet": 0, "skipped": 0}
     if root:
-        rows, warnings, walk_errors, counts = lint_manifest(
+        rows, warnings, notes, walk_errors, counts = lint_manifest(
             root,
             schedules,
             ctx,
@@ -392,6 +394,8 @@ def cmd_lint(args: list[str]) -> int:
         errors.extend(walk_errors)
     for warning in warnings:
         print(f"warn: {warning}")
+    for note in notes:
+        print(f"note: {note}")
     for error in errors:
         print(f"ERROR: {error}")
     print(
@@ -399,7 +403,9 @@ def cmd_lint(args: list[str]) -> int:
         + (f", {counts['not_yet']} not-yet" if counts["not_yet"] else "")
         + (f", {counts['skipped']} skipped" if counts["skipped"] else "")
     )
-    print("exam note: avoid circular exams that pass by echoing the task string; measure behavior or protected ground truth.")
+    if not opts.get("no-exec"):
+        # A human epilogue; the --no-exec output is a machine-consumed gate.
+        print("exam note: avoid circular exams that pass by echoing the task string; measure behavior or protected ground truth.")
     if not errors:
         no_agent = any("no agent" in warning for warning in warnings)
         print("no schema errors; set an agent first (see the warning above), then: lute run" if no_agent else "no schema errors; next: lute run")

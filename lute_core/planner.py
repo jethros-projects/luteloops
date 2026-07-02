@@ -164,6 +164,9 @@ def _test_and_check_files(files: list[str]) -> list[str]:
     names: list[str] = []
     for path in files:
         base = os.path.basename(path).lower()
+        # "check" must stand alone in the name: checkout.ts is product code,
+        # check-reports.sh and health_check.py are exam material.
+        base_words = re.split(r"[^a-z]+", base)
         if (
             path.startswith("tests/")
             or path.startswith("test/")
@@ -171,11 +174,20 @@ def _test_and_check_files(files: list[str]) -> list[str]:
             or path.startswith("scripts/check")
             or path.startswith("scripts/test")
             or base.startswith("test")
-            or "check" in base
+            or "check" in base_words
             or base in {"pytest.ini", "tox.ini", "noxfile.py"}
         ):
             names.append(path)
     return names
+
+
+# Framework names rarely appear in paths; their file extensions do.
+FRAMEWORK_EXTENSIONS = {
+    "react": (".jsx", ".tsx"),
+    "vue": (".vue",),
+    "svelte": (".svelte",),
+    "typescript": (".ts", ".tsx"),
+}
 
 
 def _goal_related_files(goal: str, files: list[str]) -> list[str]:
@@ -186,7 +198,12 @@ def _goal_related_files(goal: str, files: list[str]) -> list[str]:
     }
     if not terms:
         return []
-    matches = [path for path in files if any(term in path.lower() for term in terms)]
+    extensions = tuple(ext for term in terms for ext in FRAMEWORK_EXTENSIONS.get(term, ()))
+    matches = [
+        path
+        for path in files
+        if any(term in path.lower() for term in terms) or (extensions and path.lower().endswith(extensions))
+    ]
     return matches[:LIST_LIMIT]
 
 
@@ -216,6 +233,16 @@ def repo_briefing(goal: str, git: GitRepo) -> str:
     """Return a bounded planning context snapshot for an agent drafting a manifest."""
     root = git.root
     files = _repo_files(root)
+    try:
+        untracked = git.untracked()
+    except Exception:  # pragma: no cover - defensive for unusual git states
+        untracked = set()
+
+    def labeled(paths: list[str]) -> list[str]:
+        # An uncommitted file is a different kind of fact: an exam anchored on
+        # one trusts state a branch base cannot restore.
+        return [f"{path} (untracked)" if path in untracked else path for path in paths]
+
     commands = (
         _package_scripts()
         + _pyproject_facts()
@@ -224,6 +251,8 @@ def repo_briefing(goal: str, git: GitRepo) -> str:
         + _ci_commands(files)
     )
     test_files = _test_and_check_files(files)
+    if test_files and not commands:
+        commands = ["no test command detected for the test files listed below — inspect how they expect to be run"]
     goal_files = _goal_related_files(goal, files)
     instructions = _read_text("AGENTS.md", 12000) if os.path.exists("AGENTS.md") else ""
     existing_manifests = _existing(("lute.yaml", "lute.proposed.yaml", "lute.plan.yaml", "Luteloops"))
@@ -243,16 +272,16 @@ def repo_briefing(goal: str, git: GitRepo) -> str:
         _format_list(commands),
         "",
         "## Existing Tests And Check Materials",
-        _format_list(test_files),
+        _format_list(labeled(test_files)),
         "",
         "## Goal-Related Path Hints",
-        _format_list(goal_files),
+        _format_list(labeled(goal_files)),
         "",
         "## Top-Level Entries",
         _format_list(_top_level()),
         "",
         "## Representative Repo Files",
-        _format_list(files, 160),
+        _format_list(labeled(files), 160),
     ]
     if instructions:
         sections.extend(

@@ -36,6 +36,65 @@ def resolvable(command: str) -> bool:
     return bool(parts) and bool(shutil.which(parts[0]))
 
 
+def command_segments(command: str) -> list[list[str]]:
+    """shlex tokens split into pipeline/list segments on &&, ||, ; and | —
+    operators inside quotes stay inside their token, so `grep "a && b" f`
+    is one segment. Each segment is returned with leading VAR=value
+    assignments and `!` negations dropped, so its first token is the head
+    a shell would resolve."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return []
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token in {"&&", "||", ";", "|"}:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(token.rstrip(";") or token)
+    if current:
+        segments.append(current)
+    cleaned = []
+    for segment in segments:
+        while segment and (segment[0] == "!" or re.match(r"[A-Za-z_]\w*=", segment[0])):
+            segment = segment[1:]
+        if segment:
+            cleaned.append(segment)
+    return cleaned
+
+
+# Words a shell resolves itself; heads here can never be a missing tool.
+SHELL_WORDS = {
+    ":", "[", "[[", "]]", "{", "}", "(", ")",
+    "case", "cd", "do", "done", "elif", "else", "esac", "eval", "exec",
+    "exit", "export", "fi", "for", "if", "in", "read", "set", "shift",
+    "then", "trap", "until", "wait", "while",
+}
+
+
+def unresolvable_heads(command: str) -> list[str]:
+    """Heads of each segment that name a tool this host cannot find —
+    resolvability only (shutil.which / path existence), nothing executed.
+    Shell words, expansions, and complex constructs are skipped: this
+    must never false-positive, because it backs a lint ERROR."""
+    missing: list[str] = []
+    for segment in command_segments(command):
+        head = segment[0]
+        if head in SHELL_WORDS or head.startswith("judge:"):
+            continue
+        if any(ch in head for ch in "$`(){}<>"):
+            continue
+        if "/" in head:
+            if not os.path.exists(head):
+                missing.append(head)
+        elif re.fullmatch(r"[A-Za-z0-9_.+-]+", head) and not shutil.which(head):
+            missing.append(head)
+    return missing
+
+
 def repo_rel(path: str) -> str | None:
     rel = os.path.relpath(os.path.abspath(path))
     if rel == "." or rel == ".." or rel.startswith(".." + os.sep):
@@ -48,12 +107,11 @@ def protected_covers(path: str, globs: list[str]) -> bool:
 
 
 def local_check_paths(command: str) -> list[str]:
-    parts = shell_argv(command)
-    if not parts or parts[0].startswith("judge:"):
-        return []
+    """Repo files a done_when reads to produce its verdict — judged per
+    segment, never across shell operators, so one command's operands are
+    not misread as another's script."""
 
     def existing_file(token: str) -> str | None:
-        token = token.rstrip(";")
         if token.startswith("-") or token == "--":
             return None
         if token.startswith("./") or "/" in token or os.path.exists(token):
@@ -62,26 +120,32 @@ def local_check_paths(command: str) -> list[str]:
                 return rel
         return None
 
-    cmd, rest = parts[0], parts[1:]
     candidates: list[str] = []
-    if cmd in {"sh", "bash", "dash", "zsh", "python", "python3", "node", "ruby", "perl"}:
-        for token in rest:
-            if token == "-c":
-                break
-            found = existing_file(token)
+    for segment in command_segments(command):
+        cmd, rest = segment[0], segment[1:]
+        if cmd.startswith("judge:"):
+            continue
+        if cmd in {"sh", "bash", "dash", "zsh", "python", "python3", "node", "ruby", "perl"}:
+            for token in rest:
+                if token == "-c":
+                    break
+                found = existing_file(token)
+                if found:
+                    candidates.append(found)
+                    break
+        elif cmd == "make":
+            if os.path.exists("Makefile"):
+                candidates.append("Makefile")
+        elif cmd in {"npm", "pnpm", "yarn"}:
+            # Registry reads never consult the local package.json for a verdict.
+            if rest and rest[0] in {"view", "info", "ping", "search", "whoami"}:
+                continue
+            if os.path.exists("package.json"):
+                candidates.append("package.json")
+        else:
+            found = existing_file(cmd)
             if found:
                 candidates.append(found)
-                break
-    elif cmd == "make":
-        if os.path.exists("Makefile"):
-            candidates.append("Makefile")
-    elif cmd in {"npm", "pnpm", "yarn"}:
-        if os.path.exists("package.json"):
-            candidates.append("package.json")
-    else:
-        found = existing_file(cmd)
-        if found:
-            candidates.append(found)
     return sorted(set(candidates))
 
 
@@ -127,10 +191,13 @@ def circular_exam_target(command: str) -> str | None:
 
 
 def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exec):
-    """Judge every loop's contract. Returns (rows, warnings, errors, counts):
-    one row per loop for the CLI to print, in walk order."""
+    """Judge every loop's contract. Returns (rows, warnings, notes, errors,
+    counts): one row per loop for the CLI to print, in walk order. Warnings
+    are actionable in the manifest; notes are environmental facts no manifest
+    edit can clear."""
     rows: list[str] = []
     warnings: list[str] = []
+    notes: list[str] = []
     errors: list[str] = []
     counts = {"pass": 0, "fail": 0, "error": 0, "not_yet": 0, "skipped": 0}
     judge_cmd = ctx.config.get("judge")
@@ -164,7 +231,10 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
                 warnings.append(f"{loop.id}: protected glob {pattern!r} matches no files")
         for check_path in local_check_paths(loop.done_when.command):
             if not protected_covers(check_path, list(loop.protected)):
-                warnings.append(f"{loop.id}: done_when invokes {check_path} but it is not covered by protected:")
+                warnings.append(
+                    f"{loop.id}: done_when invokes {check_path} but it is not covered by protected: "
+                    "(protect it — unless editing it is this loop's task)"
+                )
         if loop.parallel and len(loop.children) < 2:
             warnings.append(f"{loop.id}: parallel with fewer than 2 children runs nothing concurrently")
         if is_placeholder_check(loop.done_when.command):
@@ -183,7 +253,7 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
                 cls = "error"
             else:
                 if judge_cmd == effective:
-                    warnings.append(f"{loop.id}: judge equals the worker agent; the doer must not grade its own homework (§6)")
+                    warnings.append(f"{loop.id}: judge equals the worker agent; the doer must not grade its own homework (skill §5)")
                 if loop.confirm < 2:
                     warnings.append(f"{loop.id}: judge: checks should use confirm: 2")
                 if caged or no_exec:
@@ -196,14 +266,21 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
                 else:
                     cls = checks.run(loop).verdict.value
         else:
+            reason = "command not found / not on PATH, or not valid shell"
             if no_exec:
                 cls = "skipped"
                 if subprocess.run(["sh", "-n", "-c", loop.done_when.command], capture_output=True).returncode:
                     cls = "error"
+                elif not caged and (missing := unresolvable_heads(loop.done_when.command)):
+                    # The gate executes nothing, but a tool this host cannot
+                    # even find is still an inadministrable exam — catch it by
+                    # resolvability, the same standard the agent check uses.
+                    cls = "error"
+                    reason = f"{missing[0]}: command not found"
             else:
                 cls = checks.run(loop, classify=True).verdict.value
             if cls == "error":
-                errors.append(f"{loop.id}: done_when not administrable: `{loop.done_when.command}` (command not found / not on PATH, or not valid shell)")
+                errors.append(f"{loop.id}: done_when not administrable: `{loop.done_when.command}` ({reason})")
             if cls == "not_yet" and budget.secs_cap(loop) is None:
                 errors.append(
                     f"{loop.id}: done_when returned 75 but budget has no time cap; "
@@ -219,9 +296,11 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
         preview = ", ".join(budget_authority_loops[:5])
         if len(budget_authority_loops) > 5:
             preview += ", ..."
-        warnings.append(
+        # An environmental fact, not a manifest defect: no edit to the file
+        # can clear it, so it must not train authors to skim real warnings.
+        notes.append(
             "uncaged agents can read Lute's answer-auth key; answered cards can refresh budgets for "
             f"{preview}. Configure cage if budget reset is a security boundary."
         )
     errors.extend(validate_schedules(schedules, str(root.id)))
-    return rows, warnings, errors, counts
+    return rows, warnings, notes, errors, counts

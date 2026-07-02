@@ -2817,6 +2817,26 @@ t_t36() { # path-to-frontier polish: lint won't wave run on without an agent; on
   grep -q 'set an agent first' l.out || die "36a) lint waved run on without naming the missing agent: $(cat l.out)"
   grep -qi 'circular exam' l.out || die "36a) lint epilogue lacks the circular-exam caveat: $(cat l.out)"
 
+  # --- a2) the machine gate stays honest: --no-exec catches a missing tool by
+  #         resolvability (nothing executed), omits the human epilogue, and the
+  #         environmental answer-key advisory rides the note channel, so every
+  #         remaining warning is actionable
+  mkrepo "$WORK/t36a2"
+  printf 'loop: ghost\nagent: "true"\ntask: t\ndone_when: "definitely-not-a-real-tool-xyz --check"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || die "36a2) --no-exec waved through a missing tool: rc=$rc $(cat l.out)"
+  grep -q 'not administrable' l.out || die "36a2) missing tool not named: $(cat l.out)"
+  if grep -qi 'circular exam' l.out; then die "36a2) machine-gate output still carries the human epilogue"; fi
+  printf 'loop: ghost2\nagent: "true"\ntask: t\ndone_when: "true && definitely-not-a-real-tool-xyz"\nbudget: 2 runs\n' > lute.yaml
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || die "36a2) missing tool hidden behind && passed the gate: $(cat l.out)"
+  printf 'loop: quiet\nagent: "true"\ntask: t\ndone_when: "test -x lute.yaml || true"\nbudget: 2 runs\n' > lute.yaml
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "36a2) clean manifest failed the gate: $(cat l.out)"
+  if grep -q 'warn:.*answer-auth key' l.out; then die "36a2) environmental advisory still on the warning channel"; fi
+  grep -q 'note:.*answer-auth key' l.out || die "36a2) answer-key advisory vanished entirely: $(cat l.out)"
+
   # --- b) once's success line offers git merge, NOT lute land (a fileless run can't be re-verified)
   mkrepo "$WORK/t36b"
   printf 'x\n' > seed.txt; seal
