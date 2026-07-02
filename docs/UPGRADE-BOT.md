@@ -45,8 +45,11 @@ recipe"; only the invoker changes. Budgets are your cost fuse: a recipe with
 ## In CI: the `lute-verify` action
 
 `contrib/action/` ships a composite GitHub Action that runs a manifest until
-green inside a workflow job and uploads the evidence (`.lute/logs/`,
-`.lute/events.jsonl`) as an artifact:
+green inside a workflow job and uploads the evidence — `.lute/logs/`,
+`.lute/events.jsonl`, and on a closed run `lute-attestation.json`, the
+verifiable statement that *this exam passed at this SHA*
+(`docs/ATTESTATION.md`; sign it with `actions/attest-build-provenance` to
+bind your workflow's identity to it):
 
 ```yaml
 # .github/workflows/repair-updates.yml

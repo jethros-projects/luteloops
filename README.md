@@ -266,6 +266,7 @@ runs only the compiled proposal after you review and rename it.
 | `lute inbox` | list every blocked/gated loop with the exact command to answer it |
 | `lute answer <loop> "..."` | reply to a card in `INBOX/`; blocked-loop answers are injected into the next run, while gated loops seal only on exact `approve` |
 | `lute judge -- "<rubric>"` | run the configured judge once against HEAD's diff — the same oracle behind `done_when: "judge: ..."`; exits 0 only when the grader's first line is `PASS` |
+| `lute attest [--verify F]` | emit (or verify) an in-toto statement binding a **closed** run's verdict to git-immutable facts: the pinned exam's hash, base + head SHAs, run count, and an event hash chain ([docs/ATTESTATION.md](docs/ATTESTATION.md)) |
 | `lute quarantine [list|diff <id>|drop <id>|drop --all]` | inspect or remove stored patches for trusted exam/control edits that Lute quarantined out of run commits |
 | `lute stop` | cleanly stop the active run (and any parallel children) in this repo |
 | `lute land [branch]` | merge `lute/<root>` into the start branch **only if the root exam still passes against the merged tree**; conflict or a failed re-check aborts clean and escalates (`--file F`; opt-in — the default is review-then-merge-yourself) |

@@ -54,3 +54,4 @@ runs:
           .lute/events.jsonl
           .lute/ledger.jsonl
           INBOX/
+          lute-attestation.json

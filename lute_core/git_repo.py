@@ -138,9 +138,9 @@ class GitRepo:
             if subject.startswith(f"lute({loop_id}): run ")
         )
 
-    def branch_base(self, cwd: str | None = None) -> str:
-        head = "HEAD"
-        for line in self.text("log", "--first-parent", "--format=%H %s", cwd=cwd).splitlines():
+    def branch_base(self, cwd: str | None = None, ref: str = "HEAD") -> str:
+        head = ref
+        for line in self.text("log", "--first-parent", "--format=%H %s", ref, cwd=cwd).splitlines():
             head, _, subject = line.partition(" ")
             if not subject.startswith("lute("):
                 return head

@@ -57,9 +57,9 @@ loops:
     budget: 25 runs
   - loop: operator-ux
     task: Keep the operator-facing surface honest - cold start, inbox/status,
-      one-shot runs, stop/on_halt, dry-run/help, guided errors, land, and
-      path-to-frontier polish.
-    done_when: "./test.sh t29 t30 t31 t32 t33 t34 t35 t36"
+      one-shot runs, stop/on_halt, dry-run/help, guided errors, land,
+      path-to-frontier polish, and loud no-edit runs.
+    done_when: "./test.sh t29 t30 t31 t32 t33 t34 t35 t36 t49"
     protected: ["test.sh", "tests/**"]
     budget: 40 runs
   - loop: red-team
@@ -70,8 +70,9 @@ loops:
     protected: ["test.sh", "tests/**"]
     budget: 35 runs
   - loop: release-integrity
-    task: Keep the extracted unit primitives, runner-owned ledger integrity, and
-      uninstall behavior aligned with the public release contract.
-    done_when: "./test.sh t41 t42 t43"
+    task: Keep the extracted unit primitives, runner-owned ledger integrity,
+      uninstall behavior, the wedge kit, and attestation aligned with the
+      public release contract.
+    done_when: "./test.sh t41 t42 t43 t50 t51"
     protected: ["test.sh", "tests/**"]
     budget: 25 runs

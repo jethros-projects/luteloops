@@ -4234,6 +4234,9 @@ PY
   [ "$rc" -eq 0 ] || die "50b) green manifest exited $rc: $(cat o.out)"
   grep -q 'all loops closed' o.out || die "50b) no closing message: $(cat o.out)"
   grep -qx 'outcome=closed' gh.out || die "50b) GITHUB_OUTPUT lacks outcome=closed: $(cat gh.out)"
+  [ -f lute-attestation.json ] || die "50b) closed run left no attestation artifact"
+  PATH="$bin:$PATH" lute attest --verify lute-attestation.json > v.out 2>&1 \
+    || die "50b) the action's attestation does not verify: $(cat v.out)"
 
   # --- c) a blocked manifest: exit 3, the cards printed, outcome=blocked
   mkrepo "$WORK/t50c"
@@ -4303,8 +4306,80 @@ EOF
   done
 }
 
+# ---------------------------------------------------------------- T51
+t_t51() { # attestation: a closed run binds its verdict to git-immutable
+          # coordinates - the pinned exam's hash, the base and head SHAs, the
+          # run-commit count, and a hash chain over the events - and refuses
+          # to attest anything it cannot re-derive
+  # --- a) a closed run attests; every attested fact re-derives from the repo
+  mkrepo "$WORK/t51a"
+  printf 'loop: att\nagent: "touch out.txt"\ntask: t\ndone_when: "test -f out.txt"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "51a) run exited $rc: $(cat run.out)"
+  rc=0; "$LUTE" attest > att.json 2> att.err || rc=$?
+  [ "$rc" -eq 0 ] || die "51a) attest exited $rc: $(cat att.err)"
+  head_sha="$(git rev-parse lute/att)"
+  base_sha="$(git log --first-parent --format='%H %s' lute/att | awk '$2 !~ /^lute\(/{print $1; exit}')"
+  exam_hash="$(git show "$base_sha:lute.yaml" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+  HEAD_SHA="$head_sha" BASE_SHA="$base_sha" EXAM_HASH="$exam_hash" python3 - att.json <<'PY' || die "51a) statement facts do not re-derive from the repo"
+import json, os, sys
+s = json.load(open(sys.argv[1]))
+assert s["_type"] == "https://in-toto.io/Statement/v1", s["_type"]
+assert s["subject"][0]["digest"]["gitCommit"] == os.environ["HEAD_SHA"]
+p = s["predicate"]
+assert p["outcome"] == "closed", p["outcome"]
+assert p["trusted_base"] == os.environ["BASE_SHA"]
+assert p["exam_sha256"] == os.environ["EXAM_HASH"]
+assert p["runs"] == 1, p["runs"]
+assert p["events"]["lines"] > 0 and len(p["events"]["chain_sha256"]) == 64
+PY
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -eq 0 ] && grep -q 'verified' v.out; } || die "51a) verify failed: rc=$rc $(cat v.out)"
+
+  # --- b) every tamper is refused with its own reason
+  cp .lute/events.jsonl events.orig
+  sed '1s/run_start/run_START/' events.orig > .lute/events.jsonl
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'events' v.out; } || die "51b) edited events not refused: rc=$rc $(cat v.out)"
+  head -2 events.orig > .lute/events.jsonl
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'shorter' v.out; } || die "51b) truncated events not refused: rc=$rc $(cat v.out)"
+  cp events.orig .lute/events.jsonl
+  python3 - att.json <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+s["predicate"]["exam_sha256"] = "0" * 64
+json.dump(s, open(sys.argv[1], "w"))
+PY
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'exam' v.out; } || die "51b) doctored exam hash not refused: rc=$rc $(cat v.out)"
+  "$LUTE" attest > att.json 2>/dev/null || die "51b) re-attest failed"
+  mkrepo "$WORK/t51b-alien"
+  printf 'loop: att\nagent: "true"\ntask: t\ndone_when: "true"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  cp "$WORK/t51a/att.json" .
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'not in this repository' v.out; } || die "51b) alien repo not refused: rc=$rc $(cat v.out)"
+
+  # --- c) only a closed manifest run attests: blocked and fileless refuse
+  mkrepo "$WORK/t51c"
+  printf 'loop: stuck\nagent: "true"\ntask: t\ndone_when: "false"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "51c) fixture should block, got $rc"
+  rc=0; "$LUTE" attest > /dev/null 2> a.err || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'closed' a.err; } || die "51c) blocked run attested: rc=$rc $(cat a.err)"
+  mkrepo "$WORK/t51c-fileless"
+  printf 'x\n' > seed.txt
+  seal
+  "$LUTE" once --until "test -f out.txt" --agent "touch out.txt" -- "t" > /dev/null 2>&1 || die "51c) once failed"
+  rc=0; "$LUTE" attest > /dev/null 2> a.err || rc=$?
+  [ "$rc" -ne 0 ] || die "51c) a fileless run attested (no committed exam to bind)"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4357,6 +4432,7 @@ desc() {
     t48) echo "ledger-locality run accounting is committed per branch (children own their ledger, merged like work); no flock artifact created or committed" ;;
     t49) echo "no-edit runs   an agent that changes nothing is named in events, console, and card; a run that edits is never flagged" ;;
     t50) echo "wedge-kit      contrib/action maps lute's exit contract onto a CI job; the recipe shape closes hermetically; shipped recipes stay schema-valid" ;;
+    t51) echo "attestation    a closed run binds exam hash + base/head SHAs + run count + event chain into a verifiable statement; tampers and un-closed runs are refused, each with its reason" ;;
   esac
 }
 
