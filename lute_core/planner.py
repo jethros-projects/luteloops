@@ -277,15 +277,15 @@ def build_plan_task(goal: str, skill_source: str, skill_body: str, briefing: str
 
 <critical_instructions>
 1. Write `lute.proposed.yaml` for the goal. Do not overwrite `lute.yaml`.
-2. Do not change product code while planning. Your durable output is the manifest draft; with `--keep-dag`, also write `lute.plan.yaml`.
+2. Do not change product code while planning. Your durable outputs are the manifest draft, any NEW exam materials it lists under `protected:` (check scripts, golden files — contract, not product code), and any runner config under `.lute/` the manifest requires (e.g. `cage:` for gated loops); with `--keep-dag`, also write `lute.plan.yaml`.
 3. Use the repository briefing below to choose real build/test/check commands and likely protected exam materials. If the briefing is insufficient, inspect the repo before writing.
-4. If your environment supports subagents, use them deliberately before writing YAML: scouts inspect independent repo areas and report facts; workers draft bounded milestone/check proposals for disjoint implementation slices. You must integrate and reconcile their findings yourself.
-5. First derive the implementation topology: target behavior, code surfaces, data/API contracts, dependency order, integration points, and existing or needed exams. Then compile that topology into loops.
-6. Decompose by independently verifiable functional milestones, not activities. A loop is valid only when it corresponds to an implementation state that must become true; never create loops just because "research", "implement", or "test" are phases.
-7. Prefer existing repo commands and tests. Do not invent unavailable commands, placeholder checks, `done_when: "true"`, or circular grep checks that merely detect text the worker can type.
-8. If a `done_when` depends on tests, fixtures, scripts, Makefiles, package scripts, or other exam materials the worker could edit, add `protected:` globs for those materials.
-9. Use only Lute-native YAML keys in `lute.proposed.yaml`: `loop`, `task`, `agent`, `done_when`, `budget`, `confirm`, `loops`, `check_every`, `gate`, `protected`, `parallel`, and top-level `schedules`.
-10. Leave the repository in a state where `lute lint lute.proposed.yaml` succeeds. The runner will re-check this after every attempt and feed failures back to you.
+4. If your environment supports subagents, use them deliberately before writing YAML: scouts inspect independent repo areas and report facts; workers draft bounded milestone/check proposals for disjoint implementation slices. You must integrate and reconcile their findings yourself. Skip scouts and workers when the goal is truly tiny and the briefing plus a brief direct inspection already answer every load-bearing question.
+5. Decompose by independently verifiable functional milestones, not activities. A loop is valid only when it corresponds to an implementation state that must become true; never create loops just because "research", "implement", or "test" are phases.
+6. Prefer existing repo commands and tests. Do not invent unavailable commands, placeholder checks, `done_when: "true"`, or circular grep checks that merely detect text the worker can type.
+7. Apply the skill's §4 protection rule exactly: protect exam materials the worker could edit (tests, fixtures, check scripts), but never a file whose editing is itself that loop's task — put that exam behind a protected check script or the underlying command instead.
+8. Use only Lute-native YAML keys in `lute.proposed.yaml`: `loop`, `task`, `agent`, `done_when`, `budget`, `confirm`, `loops`, `check_every`, `gate`, `protected`, `parallel`, and top-level `schedules`.
+9. Leave the repository in a state where full `lute lint lute.proposed.yaml` succeeds. The runner re-checks `lute lint --no-exec` after every attempt and feeds failures back; `--no-exec` will not catch a missing tool or an uncapped watcher, so verify command resolvability yourself and run full lint before finishing.
+10. The <luteloops_skill> block below is the authoritative skill text and supersedes any other luteloops copy installed in your environment (plugin caches, ~/.codex, ~/.claude).
 </critical_instructions>
 
 <authoring_workflow>
@@ -309,5 +309,5 @@ def build_plan_task(goal: str, skill_source: str, skill_body: str, briefing: str
 {dag_instructions}
 
 <final_reminder>
-Before finishing, make the manifest lintable and self-contained. The next check is `lute lint lute.proposed.yaml`; if it fails, read the existing `lute.proposed.yaml`, repair the lint-reported issues while preserving valid structure, and rerun or mentally audit the same check.
+Before finishing, make the manifest lintable and self-contained. The next automated check is `lute lint --no-exec lute.proposed.yaml` — schema and shell syntax only. Also run full `lute lint lute.proposed.yaml` yourself to execute each exam once; for any loop with `check_every`, read the per-loop classification: a healthy watcher reports not_yet, not fail. If the gate fails, read the existing `lute.proposed.yaml`, repair the lint-reported issues while preserving valid structure, and re-audit.
 </final_reminder>"""
