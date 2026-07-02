@@ -1,4 +1,15 @@
-"""Parallel child worktrees."""
+"""Parallel children in their own git worktrees.
+
+A `parallel:` parent runs its children concurrently, each on its own branch in
+its own worktree, then merges them back. `run_parallel` is the choreography:
+select the children that still need a run, reap any orphan left by a crashed
+prior run (by the two-factor identity in `processes.owns`, refusing to reuse a
+worktree whose old process can't be proven gone), spawn each child detached,
+join them, then audit and merge each child branch. Two ownership rules keep a
+crash from leaking a process: a spawned child is registered the instant it
+exists and only THEN does its fallible bookkeeping (`spawn_child` +
+`run_parallel`), and a merge is refused if a child branch touched trusted
+exam/control material (`merge_all` -> `trusted_merge_escalate`)."""
 
 from __future__ import annotations
 
@@ -171,9 +182,11 @@ def merge_escalate(runner, parent: LoopSpec, child: LoopSpec, merged: list[str],
 
 def run_parallel(runner, parent: LoopSpec, agents_by_loop: dict[str, str | None]) -> None:
     head = runner.git.head()
+    # A child needs its own run only if it has sub-loops, is gated, or its check
+    # does not already pass; the slot number distinguishes its worktree/LUTE_SLOT.
     pending = [
-        (index, child)
-        for index, child in enumerate(parent.children, 1)
+        (slot, child)
+        for slot, child in enumerate(parent.children, 1)
         if child.children or child.gate or runner.checks.run(child).verdict.value != "pass"
     ]
     if pending:
