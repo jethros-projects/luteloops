@@ -2,8 +2,8 @@
 
 Lute has two trust bases, and only one holds without a cage. This page states
 which is which, so a reader learns Lute's boundaries in five minutes instead of
-by reading the runner. It is the contractual form of honesty the README carries
-in prose and `BLOCKERS.md` carries as engineering notes.
+by reading the runner. It is the contractual form of the honesty the README
+carries in prose.
 
 **Intent, in one sentence:** the cage isolates the *filesystem* and *host
 secrets*; network egress is the operator's to seal.
@@ -70,8 +70,8 @@ empty working directory over the stdin diff only.
 
 ## Explicitly out of scope
 
-These are named boundaries, not oversights. Each already lives in `BLOCKERS.md`
-as an engineering note; here they are the user-facing contract.
+These are named boundaries, not oversights: each is a deliberate engineering
+decision, and this list is its user-facing contract.
 
 - **Network egress.** The cage isolates the filesystem and host secrets, not the
   network — the built-in `docker` template keeps egress on so model CLIs can
