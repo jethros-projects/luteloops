@@ -1,5 +1,7 @@
 # Lute Loops v0.2.0
 
+[![exam](https://github.com/jethros-projects/luteloops/actions/workflows/exam.yml/badge.svg)](https://github.com/jethros-projects/luteloops/actions/workflows/exam.yml)
+
 > Turtles all the way down
 
 AI coding agents changed the bottleneck. The hard part is no longer getting a
@@ -132,6 +134,17 @@ Lute: pytest passes. Commit the close. Done.
 That is the whole product. Agent writes. Lute checks. Git records. Budgets stop
 runaway loops. Cards pull you back in when the model needs help. The runner
 never trusts the agent's confidence or exit code. The exam decides.
+
+**"Isn't this just a bash loop?"** At the kernel, yes — `contrib/lute.sh` is a
+thirty-line one, and it passes Lute's first two notches. The product is
+everything the thirty lines cannot say: the agent cannot pass by editing the
+exam (tampered materials are quarantined and restored), cannot buy budget by
+rewriting the ledger (accounting is re-derived from committed history), cannot
+end the loop by *sounding* done (only the runner's own re-run of `done_when`
+closes a loop), and cannot fail silently forever (budgets become cards in
+`INBOX/`). How that differs from ralph-style loops, Aider, vendor goal
+features, and plain CI is spelled out, both directions, in
+[docs/COMPARED.md](docs/COMPARED.md).
 
 ## The Loop
 
