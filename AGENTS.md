@@ -19,6 +19,10 @@ fallback checklist.
 Non-negotiables:
 - one loop per independently verifiable milestone; decompose along
   verifiability boundaries, never activity steps
+- an `agent:` must be a non-interactive spelling with the rights its task
+  needs (e.g. `codex exec --sandbox workspace-write`,
+  `claude -p --permission-mode acceptEdits`); an interactive CLI, or one
+  without edit rights, exits having changed nothing and burns runs
 - nesting means AND, list order means sequence, check-before-work means if
 - there is no if/else, runtime `depends_on`, or expression language; condition
   logic lives in shell inside `done_when`

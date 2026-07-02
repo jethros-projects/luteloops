@@ -15,9 +15,13 @@ The bot opened `renovate/some-dep-5.x` and CI is red:
 git fetch origin renovate/some-dep-5.x
 git checkout renovate/some-dep-5.x
 cp path/to/contrib/recipes/npm-dep-major.yaml lute.yaml   # answer its four questions
-lute lint
-lute run                       # grinds on branch lute/dep-major-repair
+lute lint  --agent "claude -p --dangerously-skip-permissions"   # recipes ship engine-less;
+lute run   --agent "claude -p --dangerously-skip-permissions"   # set yours here, in the
+                                                                # file, or in .lute/config.yaml
 ```
+
+The run grinds on branch `lute/dep-major-repair` (and leaves you there when it
+closes).
 
 Lute branches from the bot's branch, so the bump is in the base and the
 recipe's exams prove the *bumped* tree installs, tests, and builds. When the
@@ -66,13 +70,14 @@ jobs:
         with: { ref: "${{ github.head_ref }}" }
       - uses: jethros-projects/luteloops/contrib/action@v0.2.0
         with:
-          manifest: .lute/recipes/dep-major.yaml   # a recipe committed to YOUR repo
+          manifest: recipes/dep-major.yaml   # a recipe committed to YOUR repo
           agent: "claude -p --dangerously-skip-permissions"
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - run: |                                    # push the repaired branch back to the PR
           git config user.name  "lute-repair"
           git config user.email "lute-repair@users.noreply.github.com"
+          git checkout "${{ github.head_ref }}"   # the run ends on the lute/<root> branch
           git merge --no-edit "lute/dep-major-repair"
           git push origin "HEAD:${{ github.head_ref }}"
 ```

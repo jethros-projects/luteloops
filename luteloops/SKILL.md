@@ -1,6 +1,6 @@
 ---
 name: luteloops
-description: Use when Codex needs to author, review, repair, or validate Lute loop manifests (`lute.yaml` or `lute.proposed.yaml`), convert a concrete goal into checkable Lute loops, use `lute plan --dag`, or tighten done_when exams, budgets, gates, protected materials, judges, and parallelism. Do not use for general Lute discussion or runner implementation debugging unless loop-manifest design is part of the request.
+description: Use when an agent needs to author, review, repair, or validate Lute loop manifests (`lute.yaml` or `lute.proposed.yaml`), convert a concrete goal into checkable Lute loops, use `lute plan --dag`, or tighten done_when exams, budgets, gates, protected materials, judges, and parallelism. Do not use for general Lute discussion or runner implementation debugging unless loop-manifest design is part of the request.
 ---
 
 # LUTELOOPS - how to compile a goal into loops
