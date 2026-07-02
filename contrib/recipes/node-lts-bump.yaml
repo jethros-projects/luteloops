@@ -31,7 +31,7 @@ loops:
   - loop: suite-on-22
     task: Repair whatever the runtime bump broke - removed core APIs,
       native module rebuilds, engine-strict installs. Never delete, skip,
-      or weaken a test.
-    done_when: "npm ci --no-audit --no-fund && npm test"
+      or weaken a test; never un-pin the declared Node version.
+    done_when: "grep -qx '22' .nvmrc && npm ci --no-audit --no-fund && npm test"
     confirm: 2
     budget: 15 runs

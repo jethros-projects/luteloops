@@ -20,24 +20,24 @@ loop: django-major
 # rights, not just edit rights - see "Engine rights" above. e.g.:
 # agent: claude -p --dangerously-skip-permissions
 budget: 48h
-done_when: "python -m pip install -q -e . && python -m pytest -q"
+done_when: "python3 -m pip install -q -e . && python3 -m pytest -q"
 protected: ["tests/**", "checks/**"]
 loops:
   - loop: bump-django           # if-trick: skipped when already on the target major
     task: Raise the Django requirement to >=5,<6 in the project's dependency
       declaration (pyproject.toml or requirements) and re-install. Change
       nothing else.
-    done_when: "python -m pip install -q -e . && python -c 'import django; raise SystemExit(0 if django.VERSION[0] == 5 else 1)'"
+    done_when: "python3 -m pip install -q -e . && python3 -c 'import django; raise SystemExit(0 if django.VERSION[0] == 5 else 1)'"
     budget: 3 runs
   - loop: fix-suite
     task: Repair everything the upgrade broke - URL patterns, settings,
       removed aliases, third-party shims. Never delete, skip, or weaken a
       test; no version pins back below the target.
-    done_when: "python -m pip install -q -e . && python -m pytest -q"
+    done_when: "python3 -m pip install -q -e . && python3 -c 'import django; raise SystemExit(0 if django.VERSION[0] == 5 else 1)' && python3 -m pytest -q"
     confirm: 2
     budget: 20 runs
   - loop: deprecations
     task: Silence every Django deprecation warning the suite still raises,
       by fixing the call sites, so the NEXT major starts clean.
-    done_when: "python -m pip install -q -e . && python -W error::DeprecationWarning -m pytest -q"
+    done_when: "python3 -m pip install -q -e . && python3 -c 'import django; raise SystemExit(0 if django.VERSION[0] == 5 else 1)' && python3 -W error::DeprecationWarning -m pytest -q"
     budget: 10 runs
