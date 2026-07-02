@@ -15,7 +15,8 @@ description: Use when Codex needs to author, review, repair, or validate Lute lo
 loop:       kebab-case id (required)
 task:       instructions for the worker agent (optional - omit on a
             parent that only aggregates children)
-agent:      worker command, e.g. "claude -p" (inherited from parent)
+agent:      worker command, e.g. "codex exec --sandbox workspace-write"
+            (inherited from parent)
 done_when:  shell command (0 = pass, 75 = not yet, else fail) OR
             "judge: <rubric>"
 budget:     "N runs", "Ns"/"Nm"/"Nh", combinable with "/" (default 10 runs)
@@ -32,6 +33,13 @@ loops:      ordered children
 ```
 
 Fixed semantics you must exploit instead of reinventing: **nesting = AND** (parent needs all children + own exam), **list order = sequence** (write B below A; never invent depends_on), **check-before-work = if** (a loop whose check already passes is skipped - to express "only do X when Y is false", write a loop whose done_when is Y). There is no if/else, no expressions, no hooks. If you feel the need for control flow, you are decomposing wrong (§3) or the logic belongs in a check (§4), a task, or an escalation.
+
+An `agent:` must be a **non-interactive spelling with the rights its task
+needs**: `codex exec --sandbox workspace-write` or
+`claude -p --permission-mode acceptEdits` for edit-shaped work; a task that
+must run commands (installs, migrations) needs more power, best granted inside
+`cage: docker`. An interactive CLI, or one without edit rights, exits having
+changed nothing - the runner marks such runs `no edits` and they burn budget.
 
 This is the loop grammar. A manifest may also have top-level `schedules:`,
 but runner configuration belongs outside `lute.yaml`: `cage:` lives in
@@ -156,7 +164,7 @@ Goal: "make this repo pass strict TypeScript"
 
 ```yaml
 loop: strict-ts
-agent: claude -p
+agent: claude -p --permission-mode acceptEdits
 budget: 24h
 done_when: "node -e 'process.exit(require(\"./tsconfig.json\").compilerOptions.strict?0:1)' && tsc --noEmit && npm test"
 loops:
@@ -174,7 +182,7 @@ Goal: "get moment.js out of the app"
 
 ```yaml
 loop: kill-moment
-agent: claude -p
+agent: claude -p --permission-mode acceptEdits
 budget: 48h
 done_when: "! grep -r 'moment' package.json && npm test && size-limit"
 loops:
@@ -188,7 +196,7 @@ loops:
     confirm: 2
     budget: 10 runs
   - loop: changelog
-    agent: codex
+    agent: codex exec --sandbox workspace-write
     task: Document the migration in CHANGELOG.md from the diff.
     # Assumes .lute/config.yaml sets judge to a command/model different from this worker.
     done_when: "judge: every user-visible behavior change in the diff has
@@ -204,7 +212,7 @@ Planning DAG, not final YAML:
 
 ```yaml
 loop: report-exports
-agent: claude -p
+agent: claude -p --permission-mode acceptEdits
 budget: 48h
 done_when: "./scripts/check-reports.sh all"
 loops:

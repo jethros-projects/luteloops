@@ -7,7 +7,7 @@
 # prose with the mechanism that enforces it. The build is sequential, not
 # `parallel:`, because every family can touch shared runner modules.
 loop: lute-initial-release
-agent: claude -p
+agent: codex exec --sandbox workspace-write
 task: Keep the complete Lute initial release suite green. If every child exam
   passes but the root exam fails, repair the integration gap without weakening
   any test, protected check, or release contract.

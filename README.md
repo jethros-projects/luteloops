@@ -11,9 +11,9 @@ same dead end?
 
 **Lute is the missing primitive: a while-loop for agents with a real exam.**
 Give it any CLI agent that reads stdin and edits the working directory
-(`claude -p`, `codex`, a shell script, your own tool). Lute runs the agent,
-re-runs the check, commits the attempt, and repeats until the machine-checkable
-`done_when` passes.
+(`codex exec`, `claude -p`, a shell script, your own tool). Lute runs the
+agent, re-runs the check, commits the attempt, and repeats until the
+machine-checkable `done_when` passes.
 
 It is deliberately plain. A Lute run is just your repo, a `lute.yaml`, a git
 branch, logs, cards, and checks.
@@ -41,8 +41,11 @@ passed, the work is on a branch, and the transcript is inspectable."
 4. Let the loop run until it closes, blocks, or asks for approval
 
 ```sh
-lute once --until "pytest -q" --agent "claude -p" -- "make the failing tests pass"
+lute once --until "pytest -q" --agent "codex exec --sandbox workspace-write" -- "make the failing tests pass"
 ```
+
+(Claude Code as the engine: `--agent "claude -p --permission-mode acceptEdits"`.
+The flags matter — see [the two engine gotchas](#the-agent-contract) below.)
 
 `once` writes no `lute.yaml`: it runs the agent on a throwaway `lute/once`
 branch until `--until` exits 0, then stops. The check is mandatory. That is
@@ -117,7 +120,7 @@ the script is intentionally tiny and imports the package next to it.
 ## See It Work
 
 ```text
-You: lute once --until "pytest -q" --agent "claude -p" -- "fix the failing tests"
+You: lute once --until "pytest -q" --agent "codex exec --sandbox workspace-write" -- "fix the failing tests"
 
 Lute: check failed. Starting run 1 on branch lute/once.
 Agent: edits app.py, appends the journal, exits.
@@ -161,7 +164,7 @@ running the final exam for the whole project.
 
 ```yaml
 loop: billing-migration
-agent: claude -p
+agent: claude -p --permission-mode acceptEdits
 budget: 72h
 done_when: "pytest tests/billing tests/api && npm test"
 loops:
@@ -296,12 +299,33 @@ pure projection of events (no rechecks). Its shape is stable:
 Match on `outcome` (and per-node `word`), not the per-node `mark` glyph; `mark` is presentational
 and may change. `exit` is `null` while `outcome` is `running`, then the integer code once it halts.
 
-**The agent contract:** any CLI is a valid engine if: it reads the prompt on **stdin**, makes its
+### The agent contract
+
+Any CLI is a valid engine if: it reads the prompt on **stdin**, makes its
 edits **in the working directory**, and exits. The runner stages tracked changes plus new files
 created during that run; it leaves pre-existing untracked clutter and `INBOX/` cards alone. The
 agent's **exit code is logged but never trusted**; the *only* verdict is the runner re-running
 `done_when`. That is why lute can't lie about doneness, and why your wrapper need not produce a
 meaningful exit code.
+
+**The two engine gotchas.** Most agent CLIs are interactive by default, and a
+non-interactive one still enforces its own permissions: without edit rights it
+exits happily having changed nothing. Lute names such runs — `no edits` on the
+console line, `"edits": false` in the event stream, and after two in a row the
+escalation card asks whether the agent command is non-interactive and allowed
+to edit files. Known-good spellings:
+
+```sh
+codex exec --sandbox workspace-write        # reads stdin, edits the workspace
+claude -p --permission-mode acceptEdits     # non-interactive, file edits allowed
+```
+
+Give the engine the rights its task needs: a dependency upgrade must run the
+package manager, so an edits-only mode is not enough there
+(`claude -p --dangerously-skip-permissions` is full power and belongs inside
+`cage: docker`; `codex exec` gains network inside its sandbox only with
+`-c sandbox_workspace_write.network_access=true`). Lute pipes the prompt and
+reads the tree; it cannot grant your agent permissions.
 
 A circular exam can still pass by echoing the task string back into a file, so it
 measures obedience rather than behavior. Prefer tests, builds, protected fixtures, or ground
@@ -332,7 +356,9 @@ Upgrade React, the lute way: write the exams, then let the loop grind:
 ```yaml
 # lute.yaml
 loop: react-19
-agent: claude -p
+# An upgrade must run npm, so the engine needs command rights, not just edit
+# rights - full power belongs inside cage: docker (see the engine gotchas).
+agent: claude -p --dangerously-skip-permissions
 budget: 48h
 done_when: "npm test && npm run build"
 loops:
