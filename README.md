@@ -397,7 +397,8 @@ loops:
     done_when: "node -e 'process.exit(require(\"react/package.json\").version.startsWith(\"19\")?0:1)'"
     budget: 3 runs
   - loop: fix-build
-    task: Fix every build error from the upgrade. No downgrades, no ts-ignore.
+    task: Fix every build error from the upgrade. No downgrades, and no
+      @ts-ignore/@ts-expect-error/@ts-nocheck to silence errors.
     done_when: "npm run build"
     budget: 15 runs
   - loop: fix-tests
