@@ -16,7 +16,7 @@ import subprocess
 
 from .cage import looks_like_container_runtime
 from .cron import validate_schedules
-from .domain import Gate, LoopSpec
+from .domain import LoopSpec
 from .protection import glob_re, protected_files
 
 
@@ -145,12 +145,12 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
             errors.append(f"{loop.id}: agent not found: {effective}")
         elif not effective and loop.task is not None:
             warnings.append(f"{loop.id}: has a task but no agent (agent:, --agent, or config)")
-        if loop.gate == Gate.HUMAN and not caged:
+        if loop.is_gated and not caged:
             errors.append(
                 f"{loop.id}: gate: human requires cage in {ctx.paths.config}; "
                 "uncaged agents can read Lute's answer-auth key and forge approval"
             )
-        elif loop.gate == Gate.HUMAN and not looks_like_container_runtime(cage):
+        elif loop.is_gated and not looks_like_container_runtime(cage):
             warnings.append(
                 f"{loop.id}: cage template does not look like a container runtime "
                 "(heuristic: expected cage: docker or a docker/podman run template), "
