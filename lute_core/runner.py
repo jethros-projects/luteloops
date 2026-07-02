@@ -24,7 +24,7 @@ from .cards import CardService
 from .checks import CheckRunner
 from .config import AnswerAuthority, freeze_config
 from .context import AppContext
-from .domain import Gate, LoopSpec, Verdict
+from .domain import LoopSpec, Verdict
 from .errors import Blocked, Gated, PreconditionError, UsageError
 from .events import EventBus, now_iso
 from .formatting import human
@@ -113,8 +113,7 @@ class Runner:
                 start = self.run_origin(str(root.id)) or start
             self.ensure_branch(str(root.id))
             self.ctx.run_pre_untracked = self.git.untracked()
-            self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
-            os.environ["LUTE_TRUSTED_BASE"] = self.ctx.trusted_base  # the pin a `lute judge` check reads
+            self.pin_trusted_base()
             self.store.ensure_layout()
             self.store.ensure_capture_ignore()
             self.seal_ignore(str(root.id))
@@ -133,16 +132,22 @@ class Runner:
         if self.git.status_porcelain("-uno").strip():
             self.git.text("reset", "-q", "--hard")
         self.ctx.run_pre_untracked = self.git.untracked()
-        self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
-        os.environ["LUTE_TRUSTED_BASE"] = self.ctx.trusted_base  # the pin a `lute judge` check reads
+        self.pin_trusted_base()
         freeze_config(self.ctx, self.git)
         self.require_human_authority_cage(target)
         self.run_loop(target, agents_by_loop)
 
+    def pin_trusted_base(self) -> None:
+        # The ref every check is judged against: the fork point of this lute
+        # branch, inherited from the parent for a child. Published to the env so
+        # a `lute judge` subprocess reads the same pin the runner enforces.
+        self.ctx.trusted_base = os.environ.get("LUTE_TRUSTED_BASE") or self.git.branch_base()
+        os.environ["LUTE_TRUSTED_BASE"] = self.ctx.trusted_base
+
     def require_human_authority_cage(self, root: LoopSpec) -> None:
         if self.ctx.active_config().get("cage"):
             return
-        gated = [str(loop.id) for _, loop in root.flatten() if loop.gate == Gate.HUMAN]
+        gated = [str(loop.id) for _, loop in root.flatten() if loop.is_gated]
         if gated:
             raise PreconditionError(
                 "gate: human requires cage in .lute/config.yaml for loop(s) "
@@ -154,8 +159,10 @@ class Runner:
         self.run_children(loop, agents_by_loop)
         passes = 0
         answer = self.cards.consume_answer(loop)
-        approved = loop.gate == Gate.HUMAN and answer is not None and answer.strip() == "approve"
-        if loop.gate == Gate.HUMAN and answer is not None and not approved:
+        # On a gated loop the only meaningful answer is the exact word `approve`;
+        # any other text is a rejection, not agent guidance, so it isn't injected.
+        approved = loop.is_gated and answer is not None and answer.strip() == "approve"
+        if loop.is_gated and answer is not None and not approved:
             answer = None
         waited_by_loop: dict[str, float] = {}
         baseline = self.protection.baseline(loop)
@@ -174,7 +181,7 @@ class Runner:
                 key = str(verdict_loop.id)
                 waited_by_loop[key] = self.wait_on_not_yet(verdict_loop, tail_text, waited_by_loop.get(key, 0.0))
                 continue
-            if loop.gate == Gate.HUMAN:
+            if loop.is_gated:
                 self.cards.supersede(str(loop.id), approved)
                 approved = False
             if self.budget.spent(loop, waited_by_loop.get(str(loop.id), 0.0)):
@@ -250,6 +257,10 @@ class Runner:
             self.cards.escalate(loop, tail_text)
         trusted = snapshot(self.ctx.paths.ledger)
         loop_id = str(loop.id)
+        # Next run number from the higher of two counts — the agent-reachable
+        # ledger and the un-rewindable commit history — so a wiped ledger can't
+        # rewind the counter below its committed floor (the dual-trust model
+        # `ledger.budget_spent` documents).
         run_number = max(total_runs(trusted.entries, loop_id), self.git.run_commit_count(loop_id)) + 1
         rel_log = f".lute/logs/{loop_id}.run{run_number}.log"
         self.store.ensure_layout()
@@ -297,7 +308,7 @@ class Runner:
         return result
 
     def close_loop(self, loop: LoopSpec, approved: bool) -> None:
-        if loop.gate == Gate.HUMAN and not approved:
+        if loop.is_gated and not approved:
             self.cards.gate_halt(loop)
         if self.git.stage_run_work(self.ctx.run_pre_untracked, self.ctx.quarantined_paths):
             self.git.commit(f"lute({loop.id}): close")

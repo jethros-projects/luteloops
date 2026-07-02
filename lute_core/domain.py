@@ -87,6 +87,11 @@ class LoopSpec:
     parallel: bool = False
     children: tuple["LoopSpec", ...] = ()
 
+    @property
+    def is_gated(self) -> bool:
+        """This loop pauses a passing exam for human approval (`gate: human`)."""
+        return self.gate == Gate.HUMAN
+
     @classmethod
     def from_normalized(cls, raw: dict[str, Any]) -> "LoopSpec":
         gate = Gate.HUMAN if raw.get("gate") == Gate.HUMAN.value else None
