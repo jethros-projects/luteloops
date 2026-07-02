@@ -2837,6 +2837,54 @@ t_t36() { # path-to-frontier polish: lint won't wave run on without an agent; on
   if grep -q 'warn:.*answer-auth key' l.out; then die "36a2) environmental advisory still on the warning channel"; fi
   grep -q 'note:.*answer-auth key' l.out || die "36a2) answer-key advisory vanished entirely: $(cat l.out)"
 
+  # --- a3) two run-breaking authoring traps are named before any run:
+  #         an UNTRACKED protected path (protection restores committed
+  #         originals, so the first check quarantine-deletes it), and a child
+  #         re-taking a task-bearing parent's exact exam (pure ceremony - the
+  #         parent already administers and repairs it). The task-less-parent
+  #         repair pattern stays silent: that one is the house style.
+  mkrepo "$WORK/t36a3"
+  printf 'loop: up\nagent: "true"\ntask: t\ndone_when: "sh checks/x.sh"\nprotected: ["checks/**"]\nbudget: 2 runs\n' > lute.yaml
+  seal
+  mkdir -p checks && printf 'exit 0\n' > checks/x.sh
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "36a3) untracked protected path must warn, not fail: $(cat l.out)"
+  grep -q 'untracked' l.out || die "36a3) untracked protected path not named: $(cat l.out)"
+  git add checks/x.sh && git commit -qm "land the exam material"
+  "$LUTE" lint --no-exec > l.out 2>&1 || die "36a3) lint failed after committing: $(cat l.out)"
+  if grep -q 'untracked' l.out; then die "36a3) committed exam material still flagged untracked"; fi
+  cat > lute.yaml <<'EOF'
+loop: parent-with-task
+agent: "true"
+task: parent does work
+done_when: "sh checks/x.sh"
+protected: ["checks/**"]
+budget: 4 runs
+loops:
+  - loop: kid
+    task: child re-takes the same exam
+    done_when: "sh checks/x.sh"
+    budget: 2 runs
+EOF
+  git add lute.yaml && git commit -qm "duplicate exam fixture"
+  "$LUTE" lint --no-exec > l.out 2>&1 || die "36a3) duplicate exam must warn, not fail: $(cat l.out)"
+  grep -q "equals its parent's" l.out || die "36a3) ceremonial duplicate exam not named: $(cat l.out)"
+  cat > lute.yaml <<'EOF'
+loop: taskless-root
+done_when: "sh checks/x.sh"
+protected: ["checks/**"]
+budget: 4 runs
+loops:
+  - loop: repair
+    agent: "true"
+    task: make the root exam pass
+    done_when: "sh checks/x.sh"
+    budget: 2 runs
+EOF
+  git add lute.yaml && git commit -qm "repair pattern fixture"
+  "$LUTE" lint --no-exec > l.out 2>&1 || die "36a3) repair pattern must lint clean: $(cat l.out)"
+  if grep -q "equals its parent's" l.out; then die "36a3) the task-less-parent repair pattern was flagged as ceremony"; fi
+
   # --- b) once's success line offers git merge, NOT lute land (a fileless run can't be re-verified)
   mkrepo "$WORK/t36b"
   printf 'x\n' > seed.txt; seal

@@ -313,7 +313,7 @@ def build_plan_task(goal: str, skill_source: str, skill_body: str, briefing: str
 6. Prefer existing repo commands and tests. Do not invent unavailable commands, placeholder checks, `done_when: "true"`, or circular grep checks that merely detect text the worker can type.
 7. Apply the skill's §4 protection rule exactly: protect exam materials the worker could edit (tests, fixtures, check scripts), but never a file whose editing is itself that loop's task — put that exam behind a protected check script or the underlying command instead.
 8. Use only Lute-native YAML keys in `lute.proposed.yaml`: `loop`, `task`, `agent`, `done_when`, `budget`, `confirm`, `loops`, `check_every`, `gate`, `protected`, `parallel`, and top-level `schedules`.
-9. Leave the repository in a state where full `lute lint lute.proposed.yaml` succeeds. The runner re-checks `lute lint --no-exec` after every attempt and feeds failures back; `--no-exec` will not catch a missing tool or an uncapped watcher, so verify command resolvability yourself and run full lint before finishing.
+9. Leave the repository in a state where full `lute lint lute.proposed.yaml` succeeds. The runner re-checks `lute lint --no-exec` after every attempt and feeds failures back; `--no-exec` checks syntax and command resolvability but executes nothing, so it cannot catch an uncapped watcher or a tool that resolves and then fails — run full lint before finishing.
 10. The <luteloops_skill> block below is the authoritative skill text and supersedes any other luteloops copy installed in your environment (plugin caches, ~/.codex, ~/.claude).
 </critical_instructions>
 
@@ -338,5 +338,5 @@ def build_plan_task(goal: str, skill_source: str, skill_body: str, briefing: str
 {dag_instructions}
 
 <final_reminder>
-Before finishing, make the manifest lintable and self-contained. The next automated check is `lute lint --no-exec lute.proposed.yaml` — schema and shell syntax only. Also run full `lute lint lute.proposed.yaml` yourself to execute each exam once; for any loop with `check_every`, read the per-loop classification: a healthy watcher reports not_yet, not fail. If the gate fails, read the existing `lute.proposed.yaml`, repair the lint-reported issues while preserving valid structure, and re-audit.
+Before finishing, make the manifest lintable and self-contained. The next automated check is `lute lint --no-exec lute.proposed.yaml` — schema, shell syntax, and command resolvability; nothing executes. Also run full `lute lint lute.proposed.yaml` yourself to execute each exam once; for any loop with `check_every`, read the per-loop classification: a healthy watcher reports not_yet, not fail. If the gate fails, read the existing `lute.proposed.yaml`, repair the lint-reported issues while preserving valid structure, and re-audit.
 </final_reminder>"""
