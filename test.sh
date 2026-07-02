@@ -2196,7 +2196,11 @@ t_t29() { # cold-start ergonomics: help/version, missing-file routing, clean-lin
   [ "$rc" -eq 0 ] || die "29a) --help exited $rc, want 0"
   grep -q 'while-loop for agents' h.out || die "29a) --help printed no usage: $(cat h.out)"
   rc=0; "$LUTE" --version > v.out 2>&1 || rc=$?
-  { [ "$rc" -eq 0 ] && grep -q 'lute 0.1.0' v.out; } || die "29a) --version: rc=$rc out=$(cat v.out)"
+  # One version, one source: --version must agree with the package attribute
+  # that pyproject.toml also reads, so the number cannot fork across surfaces.
+  v="$(cd "$ROOT" && python3 -c 'import lute_core; print(lute_core.__version__)')" \
+    || die "29a) lute_core.__version__ is missing (the single version source)"
+  { [ "$rc" -eq 0 ] && grep -qx "lute $v" v.out; } || die "29a) --version: rc=$rc out=$(cat v.out), want lute $v"
   rc=0; "$LUTE" run --help > rh.out 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "29a) 'run --help' exited $rc (should intercept, not die unknown-flag): $(cat rh.out)"
   rc=0; "$LUTE" plan --help > ph.out 2>&1 || rc=$?

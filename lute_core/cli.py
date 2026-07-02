@@ -25,6 +25,7 @@ import sys
 from importlib import resources
 
 from . import cli_args, judge, processes, schema
+from . import __version__
 from .cards import summarize_card
 from .detached import spawn_run, terminal_ok
 from .config import load_config
@@ -41,7 +42,7 @@ from .state_store import StateStore
 from .status import render_inbox, render_status
 from .watch import render_filtered, render_json, render_snapshot
 
-VERSION = "lute 0.1.0"
+VERSION = f"lute {__version__}"
 SKILL_PATH = "luteloops/SKILL.md"
 SKILLS = (SKILL_PATH,)
 PLAN_PROTECTED = ("lute", "lute_core/**", SKILL_PATH)

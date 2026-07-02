@@ -1,4 +1,4 @@
-# Lute Loops v0.1.0
+# Lute Loops v0.2.0
 
 > Turtles all the way down
 
@@ -76,14 +76,14 @@ copy to inspect or customize.
 Paste this in a terminal to install Lute:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.1.0/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/install.sh | bash
 ```
 
 Uninstall just the tool, leaving project repos, `.lute/`, `INBOX/`, branches,
 logs, and crontab entries alone:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.1.0/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/uninstall.sh | bash
 ```
 
 Or ask Codex/Claude Code:
@@ -102,7 +102,7 @@ lute --help
 To install the tagged release directly:
 
 ```sh
-pipx install git+https://github.com/jethros-projects/luteloops.git@v0.1.0
+pipx install git+https://github.com/jethros-projects/luteloops.git@v0.2.0
 ```
 
 Or run it straight from a checkout. The executable is a tiny `lute` script, and
