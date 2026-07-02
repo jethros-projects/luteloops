@@ -1,4 +1,12 @@
-"""Runtime paths and application context."""
+"""Runtime paths and the per-run application context.
+
+`Paths.for_repo` names every runner-owned location once: state under
+`.lute/`, cards in `INBOX/`, and the ledger deliberately pinned to the repo's
+own tree so it is committed with the branch's work. `AppContext` is the bag
+of run-scoped facts threaded through the runner — manifest, mode, frozen
+config, trusted base, quarantine bookkeeping — and `active_config` prefers
+the frozen copy, so a mid-run config edit changes nothing.
+"""
 
 from __future__ import annotations
 

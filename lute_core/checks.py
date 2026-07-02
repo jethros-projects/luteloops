@@ -1,4 +1,13 @@
-"""Shell check execution and verdict classification."""
+"""Exam administration: run a check, classify its exit code.
+
+`run_shell_check` executes a `done_when` in its own session and maps the exit
+status onto the verdict trichotomy — 0 pass, 75 not-yet, anything else fail —
+with a timeout counted as a failed exam, never a crash (`run_command` reaps
+the whole process group on timeout or interrupt, so a stop cannot orphan a
+check). `CheckRunner.run` resolves the one non-shell spelling, the `judge:`
+prefix, to the grader in `judge.py`; its verdict is still nothing but an exit
+code.
+"""
 
 from __future__ import annotations
 

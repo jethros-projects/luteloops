@@ -1,4 +1,13 @@
-"""Agent and notification command execution."""
+"""Running the model-facing commands: agents and the halt hook.
+
+`run_agent_command` feeds the prompt on stdin, streams all output to the
+per-run log, and reaps the agent's whole process group on exit or interrupt —
+the runner owns what it spawns. `AgentRunner` adds the policy around that
+call: wrapping commands in the configured cage, building the iteration prompt
+(failing-check tail, journal ritual, any human answer), nagging when the
+journal went untouched, and firing the fire-and-forget `on_halt` notifier
+with `LUTE_LOOP`/`LUTE_REASON`/`LUTE_CARD` in its environment.
+"""
 
 from __future__ import annotations
 

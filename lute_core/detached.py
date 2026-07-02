@@ -1,4 +1,10 @@
-"""Detached run helpers and terminal detection."""
+"""Detached runs: `lute run --bg` and the auto-detach decision.
+
+`terminal_ok` answers "is a human actually watching?" — both stdio ends a TTY
+and a real TERM. `spawn_run` re-executes lute as a `--plain` child in its own
+session, output to `.lute/logs/runner.log`, immune to hangup: the run
+survives the terminal closing and is re-attached with `lute watch`.
+"""
 
 from __future__ import annotations
 

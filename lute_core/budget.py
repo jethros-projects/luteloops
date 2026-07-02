@@ -1,4 +1,11 @@
-"""Budget parsing and spending decisions."""
+"""Budget decisions, asked fresh every iteration.
+
+`BudgetService.spent` recomputes a loop's spend from the ledger entries plus
+the committed run-commit count — the floor an agent cannot edit away — and
+the authenticated answers that each forgive one cap; the accounting itself
+lives in `ledger.budget_spent`. `runs_cap`/`secs_cap` read the parsed limits
+off the `LoopSpec`.
+"""
 
 from __future__ import annotations
 

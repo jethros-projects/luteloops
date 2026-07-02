@@ -1,4 +1,14 @@
-"""Configuration loading, freezing, and answer authority."""
+"""Configuration loading, freezing, and the answer-auth key.
+
+Three trust jobs live here. `load_config` reads `.lute/config.yaml`, refusing
+symlinks and other non-regular files. `freeze_config` pins the config a run
+will trust — the copy committed at the trusted base — so an agent's edit to
+the on-disk file cannot re-point the judge or the cage mid-run.
+`AnswerAuthority` mints and verifies the HMAC tokens that make an answer
+*yours*: the key is created atomically under `~/.lute/keys/` (hard-link
+publish, `O_EXCL` fallback) and never enters a cage, which is exactly why a
+caged agent cannot forge approval or a budget refresh.
+"""
 
 from __future__ import annotations
 

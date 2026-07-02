@@ -1,4 +1,12 @@
-"""Live status and inbox rendering."""
+"""Rendering for `lute status` and `lute inbox`.
+
+Unlike `watch`, `status` is live: for each loop without an unanswered card it
+re-runs the check once and prints the glyph the fresh verdict earns; a loop
+with an open card keeps its blocked/gated mark rather than being re-examined
+behind the answer's back. The footer totals runs and agent time from the
+ledger and names the next command — an answer, or `lute land` once the root
+is green.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,10 @@
-"""Typed errors for lute's executable boundary."""
+"""Typed errors for lute's executable boundary.
+
+Every failure the CLI can exit with is one of these classes, and each carries
+its `ExitCode` — usage/precondition 1, git/internal 2, blocked 3, gated 4 —
+so `main` turns any raised `LuteError` into the right shell contract without
+a mapping table at the call sites.
+"""
 
 from __future__ import annotations
 

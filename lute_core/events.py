@@ -1,4 +1,13 @@
-"""Event stream projections."""
+"""The event stream: append-only facts, replayable projections.
+
+The runner narrates through `EventBus.emit`, which appends one JSON line per
+event to `.lute/events.jsonl` (and, in `--plain` mode, prints the matching
+human line). Renderers never share memory with the runner: `replay_events`
+folds the log back into per-loop state, tolerating malformed lines, which is
+what makes `lute watch` free, read-only, and safe mid-run. The glyph
+vocabulary (`GLYPH_WORD`, `ASCII_MAP`) lives here too, and `output_line`
+downgrades it to ASCII when stdout cannot carry UTF-8.
+"""
 
 from __future__ import annotations
 

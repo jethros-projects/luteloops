@@ -1,4 +1,9 @@
-"""Small display formatting helpers."""
+"""Small display formatting helpers.
+
+`human` renders seconds the way the status line speaks (`3m07s`), and `tail`
+keeps the last N lines — the shape every check's output is clipped to before
+it rides into a prompt.
+"""
 
 from __future__ import annotations
 

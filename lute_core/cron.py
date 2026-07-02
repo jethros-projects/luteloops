@@ -1,4 +1,14 @@
-"""Crontab sync/remove command logic."""
+"""`lute cron sync|remove`: compile `schedules:` into a crontab block.
+
+The managed block is fenced by `# BEGIN lute <repo>` / `# END lute <repo>`
+markers and rewritten idempotently; each tick is a fresh
+`lute run --skip-if-running <root>`, so an overlapping tick exits quietly
+instead of double-running. The rewrite is deliberately timid: an unreadable
+crontab or a dangling marker aborts with instructions rather than guessing,
+because silently dropping a user's other cron lines is the one unforgivable
+failure here. Only root loops are schedulable, and only with a plain
+five-field cron expression.
+"""
 
 from __future__ import annotations
 
