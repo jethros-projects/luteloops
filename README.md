@@ -237,14 +237,15 @@ runs only the compiled proposal after you review and rename it.
 | `lute lint [file]` | validate the schema, resolve uncaged agents (caged agent commands are not resolved on the host), and **execute every `done_when` once** except caged judge checks, which are reported as skipped; classify each pass / fail / error / not-yet / skipped; an error fails the lint, because an exam must be administrable before work begins |
 | `lute run [root-id]` | run loops depth-first until everything is green (`--agent CMD`, `--file F`, `--plain`, `--bg` to detach, `--dry-run` to preview, `--skip-if-running` for cron overlap); child loops run through their parent |
 | `lute once --until C -- "task"` | one-shot, no file: run an agent until check `C` passes (`--agent`, `--id`, `--budget`) |
-| `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable) |
+| `lute watch [file]` | read-only event snapshot for a running or finished run (`--snapshot` text, `--json` machine-readable, `--filter LOG` de-noise a transcript) |
 | `lute status [file]` | re-run each check once for loops without an unanswered card and print the loop hierarchy: ✔ done / ↻ running / ⏳ waiting / ✗ blocked / ✋ gated, plus cumulative agent time |
 | `lute inbox` | list every blocked/gated loop with the exact command to answer it |
 | `lute answer <loop> "..."` | reply to a card in `INBOX/`; blocked-loop answers are injected into the next run, while gated loops seal only on exact `approve` |
+| `lute judge -- "<rubric>"` | run the configured judge once against HEAD's diff — the same oracle behind `done_when: "judge: ..."`; exits 0 only when the grader's first line is `PASS` |
 | `lute quarantine [list|diff <id>|drop <id>|drop --all]` | inspect or remove stored patches for trusted exam/control edits that Lute quarantined out of run commits |
 | `lute stop` | cleanly stop the active run (and any parallel children) in this repo |
-| `lute land [branch]` | merge `lute/<root>` into the start branch **only if the root exam still passes against the merged tree**; conflict or a failed re-check aborts clean and escalates (opt-in; the default is review-then-merge-yourself) |
-| `lute plan [--dag] [--keep-dag] "<goal>"` | an agent reads the luteloops skill and drafts `lute.proposed.yaml`; `--dag` uses dependency planning first, and `--keep-dag` also writes `lute.plan.yaml` for review |
+| `lute land [branch]` | merge `lute/<root>` into the start branch **only if the root exam still passes against the merged tree**; conflict or a failed re-check aborts clean and escalates (`--file F`; opt-in — the default is review-then-merge-yourself) |
+| `lute plan [--dag] [--keep-dag] "<goal>"` | an agent reads the luteloops skill and drafts `lute.proposed.yaml`; `--dag` uses dependency planning first, and `--keep-dag` also writes `lute.plan.yaml` for review (`--agent CMD` picks the drafting agent, as it does for `lint`'s resolution pass) |
 
 Plus `lute cron sync` / `lute cron remove` for the `schedules:` manifest (below), and
 `lute --help` / `lute <verb> --help` / `lute --version`.
@@ -286,8 +287,8 @@ pure projection of events (no rechecks). Its shape is stable:
   "exit": 3,                  // matching exit int; null while outcome is "running"
   "ended": false,             // true only after a run_end event; blocked/gated runs may halt first
   "branch": "lute/build",
-  "tree": { "id": "build", "word": "blocked", "runs": 2, "secs": 41.0, "active": false,
-            "children": [ /* same shape, recursively */ ] },
+  "tree": { "id": "build", "depth": 0, "mark": "✗", "word": "blocked", "runs": 2, "secs": 41.0,
+            "active": false, "children": [ /* same shape, recursively */ ] },
   "cards": [ { "lid": "build", "gated": false, "answered": false, "summary": "BLOCKED: ...", "next": "lute answer build \"...\"" } ]
 }
 ```
@@ -314,6 +315,15 @@ never follows agent-created symlinks. Journals are prompt memory: agents append 
 but budget and closure decisions never trust journal contents. If an agent deletes `.lute/logs`,
 symlinks the ledger to `/dev/null`, truncates it, or rewrites durations, the runner restores trusted
 state and budget accounting continues from the ledger snapshot plus committed run history.
+
+**Knobs and handshakes (env):** two are yours to set: `LUTE_CHECK_TIMEOUT`
+(seconds, default 600) caps every check and judge run, and `LUTE_KEY_DIR`
+relocates the answer-auth key directory (default `~/.lute/keys`). The rest are
+the runner's own plumbing, exported to the processes it spawns: `LUTE_SLOT`
+numbers parallel children (1, 2, 3…) so their checks can dodge collisions,
+`LUTE_TRUSTED_BASE` pins the commit that exams and judges are audited against,
+and `LUTE_STATE_DIR` points a parallel child at its own state directory. Read
+them in checks freely; set them yourself only in tests.
 
 ## Write Your First `lute.yaml`
 
@@ -581,9 +591,11 @@ cage_mounts:                # extra host paths, mounted read-only, by name
   - "~/.config/my-agent"    # agent auth enters here; never implicitly
 ```
 
-A `done_when: "judge: <rubric>"` is sugar for the `lute judge -- "<rubric>"`
-command: the judge is not a special kind of check but an ordinary one whose exit
-code is the verdict, like every other `done_when`. That command sends the rubric
+A `done_when: "judge: <rubric>"` runs the same oracle you can invoke by hand as
+`lute judge -- "<rubric>"` (the check runner resolves the prefix to that grader
+in-process rather than through your shell). Either way the judge keeps an
+ordinary check's contract: the verdict is an exit code, like every other
+`done_when`. The judge sends the rubric
 as trusted instructions and wraps the candidate diff inside
 `BEGIN UNTRUSTED DIFF` / `END UNTRUSTED DIFF` markers. The judge runs in an empty
 working directory and grades the stdin diff only; if a grader must read or
