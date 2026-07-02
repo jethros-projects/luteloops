@@ -60,6 +60,18 @@ def command_line(pid: int | None) -> str:
     ).stdout
 
 
+def lsof_path() -> str | None:
+    """Find lsof even under a cron-shaped PATH: /usr/sbin is where macOS keeps
+    it, and cron ticks (and other minimal environments) do not carry sbin."""
+    found = shutil.which("lsof")
+    if found:
+        return found
+    for candidate in ("/usr/sbin/lsof", "/usr/bin/lsof"):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def proc_cwd(pid: int) -> str | None:
     """Return pid's cwd, or None when this host cannot determine it."""
     link = f"/proc/{pid}/cwd"
@@ -68,11 +80,12 @@ def proc_cwd(pid: int) -> str | None:
             return os.path.realpath(link)
         except OSError:
             return None
-    if not shutil.which("lsof"):
+    lsof = lsof_path()
+    if not lsof:
         return None
     try:
         result = subprocess.run(
-            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            [lsof, "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
             capture_output=True,
             text=True,
             encoding="utf-8",
