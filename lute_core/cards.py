@@ -1,4 +1,14 @@
-"""Card parsing and summaries."""
+"""Escalation cards — the human-in-the-loop protocol.
+
+When the runner can't proceed it raises a card into `INBOX/<loop>.md`: a *block*
+(needs guidance) or a *gate* (a passing loop awaiting `approve`). The human
+replies with `lute answer`, which appends `ANSWER:` plus an HMAC `ANSWER-AUTH:`
+token over the card body. `consume_answer` re-derives that token and only trusts
+a matching one — an `ANSWER:` without a valid auth is silently dropped and the
+card cleared, because an uncaged agent could otherwise forge approval or a budget
+reset. A genuine answer logs an authenticated ledger line (which resets the loop's
+budget) and, for a gate, seals it. The two free functions here just read a card;
+`CardService` runs the lifecycle."""
 
 from __future__ import annotations
 
@@ -98,9 +108,7 @@ class CardService:
         genuine = bool(match) and self.authority.valid(lid, basis, match.group(1))
         self.store.remove_runner_file(path)
         if not genuine:
-            if self.git.ok("ls-files", "--error-unmatch", "--", path, cwd=self.ctx.shared_root):
-                self.git.shared_text(self.ctx.shared_root, "add", "-A", "--", path)
-                self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): card cleared")
+            self._clear_shared_card(lid, path)
             return None
         nonce = basis
         self.ledger_append({"ts": now_iso(), "loop": lid, "event": "answer", "n": nonce, "auth": self.authority.token(lid, nonce)})
@@ -108,10 +116,15 @@ class CardService:
         # worktree branch); the card lives in the shared INBOX and clears there.
         self.git.text("add", "--", self.ctx.paths.ledger)
         self.git.commit(f"lute({lid}): answer consumed", allow_empty=True)
+        self._clear_shared_card(lid, path)
+        return answer
+
+    def _clear_shared_card(self, lid: str, path: str) -> None:
+        """Commit the removal of a consumed card from the shared INBOX (if it was
+        ever tracked there); a no-op for a card only held in the worktree."""
         if self.git.ok("ls-files", "--error-unmatch", "--", path, cwd=self.ctx.shared_root):
             self.git.shared_text(self.ctx.shared_root, "add", "-A", "--", path)
             self.git.shared_text(self.ctx.shared_root, "commit", "-q", "--allow-empty", "-m", f"lute({lid}): card cleared")
-        return answer
 
     def answer_card(self, loop_id: str, text: str) -> str | None:
         path = self.path(loop_id)
