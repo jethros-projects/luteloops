@@ -1,4 +1,14 @@
-"""Prompt construction for `lute plan`."""
+"""Prompt construction for `lute plan`.
+
+`repo_briefing` walks the repo once and assembles a bounded, factual snapshot —
+git status, build/test/CI signals, existing test and check materials, path
+hints matched against the goal — with every list truncated so a huge repo
+cannot flood the planning prompt. `build_plan_task` then wraps the goal, that
+briefing, and the packaged luteloops skill into the task string the drafting
+agent receives. Everything here is orientation, not runtime state: the only
+durable artifact a plan run may write is `lute.proposed.yaml` (plus
+`lute.plan.yaml` under `--keep-dag`).
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,13 @@
-"""Cage command template expansion."""
+"""Cage command template expansion.
+
+A cage is just a command template: `{repo}`, `{image}`, `{mounts}`, and
+`{cmd}` are the only substitutions (shell-quoted here, so a `${VAR}` in an
+operator's template survives untouched). `DEFAULT_CAGE_TEMPLATE` is the
+built-in `docker` spelling — repo read-write at `/work`, named mounts
+read-only, network deliberately left on so model CLIs can reach their APIs.
+`looks_like_container_runtime` is advisory only; nothing is gated on a
+string heuristic.
+"""
 
 from __future__ import annotations
 

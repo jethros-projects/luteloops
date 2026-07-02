@@ -1,4 +1,10 @@
-"""Small CLI argument helpers used by the executable boundary."""
+"""Small CLI argument helpers used by the executable boundary.
+
+A deliberate non-dependency: `parse_args` understands exactly the shapes lute
+needs — value flags, boolean flags, and `--` to stop parsing — and rejects
+anything unknown. `require_positionals` turns a wrong arity into the verb's
+usage line.
+"""
 
 from __future__ import annotations
 

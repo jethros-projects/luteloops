@@ -6,8 +6,9 @@ answer, judge, quarantine, stop, cron, init — each map to a `cmd_*` handler, a
 `main` dispatches to them. Every handler has the same shape: parse args (`parse`
 / `need_pos`), build context, do the work, return a process exit code. That code
 is the whole contract with the shell: 0 all loops closed, 1 usage/precondition,
-3 blocked (needs `lute answer`), 4 gated (needs `lute answer <loop> approve`) —
-raised as `Blocked`/`Gated`/`LuteError` and turned into the exit code by `main`.
+2 internal/git failure, 3 blocked (needs `lute answer`), 4 gated (needs
+`lute answer <loop> approve`) — raised as `Blocked`/`Gated`/`LuteError` and
+turned into the exit code by `main`.
 
 Two context builders serve the handlers: `make_context` for those that assemble
 their own `AppContext`, `make_runtime` for those that also want a `Runner`. This

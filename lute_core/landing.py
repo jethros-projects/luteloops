@@ -1,4 +1,15 @@
-"""Landing a lute branch back to its start branch."""
+"""`lute land`: merge the work back only if the exam still passes.
+
+The merged tree is the thing being graded: land merges `lute/<root>` into the
+start branch, re-audits protected material, re-runs the root exam against the
+result, and keeps the merge only if everything holds. Every failure path — a
+branch that touched trusted material, a merge conflict, an edit quarantined
+during the land itself, a failing root exam — resets the target branch to its
+pre-merge tip and raises a card instead; the target is never left dirty. Note
+the two trusted bases: the branch is audited against the fork point, the
+merged tree against the target's tip, so the target's own post-fork edits are
+its truth, not tampering.
+"""
 
 from __future__ import annotations
 

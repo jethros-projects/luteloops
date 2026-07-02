@@ -1,4 +1,13 @@
-"""YAML loading and normalization for lute manifests."""
+"""The manifest front door: untrusted YAML in, `LoopSpec` out.
+
+`load` reads a manifest and `norm_loop` recursively normalizes each node
+against the closed key set (`LOOP_KEYS`): unknown keys get a did-you-mean
+hint, malformed fields are coerced to safe defaults, and every complaint is
+accumulated rather than raised, so one pass reports every problem. Because a
+manifest is untrusted text that becomes trusted decisions, this parser must
+never crash and never read garbage as a valid exam — the fuzz layer in
+`tests/test_lute_core.py` holds it to that.
+"""
 
 from __future__ import annotations
 

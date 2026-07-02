@@ -1,4 +1,12 @@
-"""Replay-only watch/snapshot state."""
+"""Replay-only rendering for `lute watch`.
+
+Everything here is a pure projection of `.lute/events.jsonl` — no check is
+ever re-run, so watching is free and cannot perturb a live run.
+`snapshot_lines` draws the loop tree with glyph marks; `state_json` emits the
+stable machine shape (`root`/`outcome`/`exit`/`ended`/`branch`/`tree`/`cards`)
+that wrappers and cron probes branch on; `noise_filter` collapses repeated
+log blocks to one copy with a `×N` marker for `--filter`.
+"""
 
 from __future__ import annotations
 
