@@ -24,7 +24,7 @@ import shutil
 import sys
 from importlib import resources
 
-from . import cli_args, judge, processes, schema
+from . import attest, cli_args, judge, processes, schema
 from . import __version__
 from .cards import summarize_card
 from .detached import spawn_run, terminal_ok
@@ -61,6 +61,7 @@ usage:
   lute inbox                   list what's waiting on you (blocked/gated cards)
   lute answer <loop> "text"    reply to an escalation card in INBOX/
   lute judge -- "<rubric>"     grade HEAD's diff with the configured judge (the oracle behind done_when: "judge: ...")
+  lute attest [--verify F]     emit (or verify) a statement binding a closed run's verdict to git SHAs
   lute quarantine [list]       inspect quarantined trusted-exam edits
   lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
@@ -92,6 +93,10 @@ HELP = {
     "plan": 'lute plan [--dag] [--keep-dag] "<goal>": draft lute.proposed.yaml via the skill.\n'
     "  --dag       ask the planner to reason from a workflow DAG, then emit normal Lute YAML\n"
     "  --keep-dag  with --dag, also write lute.plan.yaml as a review/debug artifact.",
+    "attest": "lute attest [--file F] [--verify STATEMENT]: the closed run's verdict as a verifiable statement.\n"
+    "  Emits an in-toto Statement (stdout) binding the pinned exam's hash, the base and\n"
+    "  head SHAs, the run count, and a hash chain over the events. --verify re-derives\n"
+    "  every fact from the repo and refuses on the first mismatch, naming it.",
 }
 
 QID_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -602,6 +607,21 @@ def cmd_land(args: list[str]) -> int:
     return 0
 
 
+def cmd_attest(args: list[str]) -> int:
+    pos, opts = parse(args, {"--file", "--verify"})
+    need_pos(pos, "usage: lute attest [--file F] [--verify STATEMENT]", 0, 0)
+    ctx, git, store, runner = make_runtime()
+    if opts.get("verify"):
+        print(attest.verify(ctx, git, opts["verify"]))
+        return 0
+    manifest = os.path.abspath(opts.get("file") or default_file())
+    manifest = trusted_file(manifest, "manifest", ctx.shared_root)
+    root, _ = load_manifest(manifest, shared_root=ctx.shared_root)
+    ctx.manifest_path = manifest
+    print(json.dumps(attest.statement(ctx, git, root, runner.cards), indent=2))
+    return 0
+
+
 def cmd_cron(args: list[str]) -> int:
     if args not in (["sync"], ["remove"]):
         raise UsageError("usage: lute cron sync|remove")
@@ -641,6 +661,7 @@ def main(argv=None) -> int:
         "stop": cmd_stop,
         "land": cmd_land,
         "judge": cmd_judge,
+        "attest": cmd_attest,
         "quarantine": cmd_quarantine,
     }
     if argv and argv[0] not in commands:

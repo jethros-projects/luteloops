@@ -32,7 +32,9 @@ lute run "${run_args[@]}" || rc=$?
 
 case "$rc" in
   0) outcome="closed"
-     echo "lute-verify: all loops closed; every attempt is a commit on the lute/<root> branch" ;;
+     echo "lute-verify: all loops closed; every attempt is a commit on the lute/<root> branch"
+     lute attest --file "$manifest" > lute-attestation.json
+     echo "lute-verify: attestation written (sign it with your CI identity to make it portable)" ;;
   3) outcome="blocked"
      echo "lute-verify: blocked - a loop exhausted its budget or hit a conflict; the cards:"
      lute inbox || true ;;
