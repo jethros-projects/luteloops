@@ -854,13 +854,19 @@ class PlannerPromptTests(unittest.TestCase):
         self.assertIn("Do not change product code while planning", task)
         self.assertIn("scouts inspect independent repo areas", task)
         self.assertIn("workers draft bounded milestone/check proposals", task)
+        self.assertIn("Skip scouts and workers when the goal is truly tiny", task)
         self.assertIn("Dispatch scouts for separate discovery questions", task)
         self.assertIn("Dispatch workers only for independent planning slices", task)
-        self.assertIn("derive the implementation topology", task)
+        self.assertIn("Internally sketch the implementation map", task)
         self.assertIn("functional milestones, not activities", task)
         self.assertIn("loops that do not trace to functional necessity", task)
         self.assertIn('done_when: "true"', task)
         self.assertIn("DAG planning mode", task)
+        # The gate is honestly stated: --no-exec re-checks, full lint is the
+        # author's job, and the embedded skill copy is authoritative.
+        self.assertIn("will not catch a missing tool", task)
+        self.assertIn("authoritative skill text", task)
+        self.assertIn("never a file whose editing is itself that loop's task", task)
 
 
 class ContextTests(unittest.TestCase):
