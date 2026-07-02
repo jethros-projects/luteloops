@@ -1,3 +1,16 @@
+"""The unit and fuzz layer under `./test.sh`'s behavioral notches.
+
+One `unittest` class per core contract: schema normalization, ledger
+accounting, config freezing and the answer-auth key, event replay, check
+classification, cage expansion, protection baselines, planner prompts, and
+the process helpers. The emphasis is adversarial — symlinked state, truncated
+ledgers, forged answers, malformed YAML — because these are the parsers and
+guards that turn untrusted text into trusted decisions. The two trust-critical
+parsers (`schema.load` and the ledger accounting) also carry a property/fuzz
+pass asserting they never crash and never misclassify garbage into a pass or
+a refund, as promised in `INVARIANT.md`.
+"""
+
 import hashlib
 import json
 import os
