@@ -112,7 +112,7 @@ budget: 48h
 
 ## 5. judge: rules
 
-`judge: <rubric>` is sugar for the ordinary command `lute judge -- "<rubric>"`: the judge is a normal `done_when` whose exit code is the verdict, not a special mode. It grades only the stdin diff in an empty working directory.
+`judge: <rubric>` runs the same oracle as the command `lute judge -- "<rubric>"` (the check runner resolves the prefix itself). It keeps a normal `done_when`'s contract — the verdict is an exit code — and it grades only the stdin diff in an empty working directory.
 
 Use a judge only when executable checks cannot capture the residue (quality, tone, coverage-by-meaning). Then, all four guardrails, always:
 

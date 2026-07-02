@@ -1,10 +1,12 @@
-"""The judge oracle, invoked as an ordinary `lute judge` check.
+"""The judge oracle, exposed as the `lute judge` verb.
 
-`done_when: "judge: <rubric>"` is sugar the runner resolves to a plain
-`lute judge` command, so the core evaluator only ever runs shell commands whose
-exit code is the verdict — the LLM grader lives here, beside the primitive, not
-inside it. This module frames the untrusted diff and runs the configured grader
-in a clean, empty working directory, exiting 0 for PASS and 1 for FAIL.
+`done_when: "judge: <rubric>"` and the standalone `lute judge -- "<rubric>"`
+both land on `grade` below — the check runner resolves the prefix to it
+in-process — so the LLM grader lives here, beside the primitive, and keeps an
+ordinary check's contract: the verdict is an exit code. This module frames the
+untrusted diff between explicit markers and runs the configured grader in a
+clean, empty working directory, exiting 0 only when the grader's first stdout
+line is exactly PASS.
 """
 
 from __future__ import annotations

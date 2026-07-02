@@ -39,8 +39,9 @@ Non-negotiables:
   `done_when` checks stay host-side
 - exit 75 means not yet; the runner re-checks on `check_every`, wakes no agent,
   and spends no run budget, so watcher loops need time budgets
-- `judge:` checks require a rubric with itemized citations, a model different
-  from the worker, and `confirm: 2`
+- give every `judge:` check a rubric with itemized citations, a model
+  different from the worker, and `confirm: 2` — lint warns on the last two,
+  but the rubric's quality is on you
 - every loop gets a budget; the root carries a global time cap
 
 Validation:
