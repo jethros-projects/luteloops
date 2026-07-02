@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""CLI boundary for lute."""
+"""CLI boundary for lute.
+
+The verbs a user types — run, land, lint, plan, once, watch, status, inbox,
+answer, judge, quarantine, stop, cron, init — each map to a `cmd_*` handler, and
+`main` dispatches to them. Every handler has the same shape: parse args (`parse`
+/ `need_pos`), build context, do the work, return a process exit code. That code
+is the whole contract with the shell: 0 all loops closed, 1 usage/precondition,
+3 blocked (needs `lute answer`), 4 gated (needs `lute answer <loop> approve`) —
+raised as `Blocked`/`Gated`/`LuteError` and turned into the exit code by `main`.
+
+Two context builders serve the handlers: `make_context` for those that assemble
+their own `AppContext`, `make_runtime` for those that also want a `Runner`. This
+module is only the boundary — the loop itself lives in `runner.py`."""
 
 from __future__ import annotations
 
@@ -231,7 +243,15 @@ def cmd_run(args: list[str]) -> int:
     root, _ = load_manifest(manifest, run_message=True, shared_root=ctx0.shared_root)
     child_mode = "LUTE_STATE_DIR" in os.environ
     target = resolved_loop(root, pos[0] if pos else None, child_mode)
-    ctx = AppContext(git.root, store.paths, load_config(store.paths.config), manifest, str(root.id), RunMode.CHILD if child_mode else RunMode.FILE, bool(opts.get("plain")))
+    ctx = AppContext(
+        repo_root=git.root,
+        paths=store.paths,
+        config=load_config(store.paths.config),
+        manifest_path=manifest,
+        root_id=str(root.id),
+        mode=RunMode.CHILD if child_mode else RunMode.FILE,
+        plain=bool(opts.get("plain")),
+    )
     runner = Runner(ctx, git, store)
     agents = runner.assign_agents(root, opts.get("agent") or ctx.config.get("agent"))
     if opts.get("dry-run"):
@@ -250,11 +270,9 @@ def cmd_run(args: list[str]) -> int:
                 f"(pid {info.get('pid')}, since {info.get('start', '?')})"
             )
             return 0
-    if opts.get("bg"):
-        proc = spawn_run(args, store, ctx.paths.runner_log)
-        print(f"detached: run continues (pid {proc.pid}) · re-attach: lute watch · stop: lute stop")
-        return 0
-    if not opts.get("plain") and terminal_ok():
+    # Detach into its own session when asked (--bg) or when a real terminal would
+    # otherwise block on a long foreground run; --plain keeps it in the foreground.
+    if opts.get("bg") or (not opts.get("plain") and terminal_ok()):
         proc = spawn_run(args, store, ctx.paths.runner_log)
         print(f"detached: run continues (pid {proc.pid}) · re-attach: lute watch · stop: lute stop")
         return 0
