@@ -16,7 +16,9 @@
 # declared task if it pins node versions (and to protected: if the matrix
 # is part of your exam).
 loop: node-lts
-agent: claude -p --dangerously-skip-permissions
+# agent: set your engine here (or pass --agent); it needs command
+# rights, not just edit rights - see "Engine rights" above. e.g.:
+# agent: claude -p --dangerously-skip-permissions
 budget: 24h
 done_when: "node -e 'process.exit(process.version.startsWith(\"v22.\")?0:1)' && npm ci --no-audit --no-fund && npm test"
 protected: ["tests/**", "checks/**"]

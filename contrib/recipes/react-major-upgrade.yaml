@@ -16,7 +16,9 @@
 # package manager; put any repo-specific smoke script under checks/ and it
 # is already protected.
 loop: react-major
-agent: claude -p --dangerously-skip-permissions
+# agent: set your engine here (or pass --agent); it needs command
+# rights, not just edit rights - see "Engine rights" above. e.g.:
+# agent: claude -p --dangerously-skip-permissions
 budget: 48h
 done_when: "npm ci --no-audit --no-fund && npm test && npm run build"
 protected: ["tests/**", "checks/**"]
