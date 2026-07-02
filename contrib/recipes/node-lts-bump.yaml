@@ -1,0 +1,35 @@
+# Recipe: move a repo to the next Node LTS (22 shown; adjust the pins).
+#
+# Run this recipe UNDER the target Node (nvm use 22 / mise use node@22)
+# before lute run - exams execute host-side, so the suite must administer
+# against the runtime you are moving to, not the one you are leaving.
+#
+# Exam design (SKILL.md §4): declared is the if-trick on the repo's own
+# pins (.nvmrc + engines), kept honest by administering under the target
+# runtime: the root exam proves the suite actually passes there, which a
+# pin edit alone cannot fake. Tests are protected.
+#
+# Engine rights: npm must run; grant command rights - best inside
+# cage: docker.
+#
+# Adapt: change 22 in the two checks; add your CI matrix file to the
+# declared task if it pins node versions (and to protected: if the matrix
+# is part of your exam).
+loop: node-lts
+agent: claude -p --dangerously-skip-permissions
+budget: 24h
+done_when: "node -e 'process.exit(process.version.startsWith(\"v22.\")?0:1)' && npm ci --no-audit --no-fund && npm test"
+protected: ["tests/**", "checks/**"]
+loops:
+  - loop: declared              # if-trick: skipped when the repo already pins 22
+    task: Pin Node 22 in .nvmrc and in package.json engines.node. Change
+      nothing else.
+    done_when: "grep -qx '22' .nvmrc && node -e 'const e=require(\"./package.json\").engines||{}; process.exit(/22/.test(e.node||\"\")?0:1)'"
+    budget: 3 runs
+  - loop: suite-on-22
+    task: Repair whatever the runtime bump broke - removed core APIs,
+      native module rebuilds, engine-strict installs. Never delete, skip,
+      or weaken a test.
+    done_when: "npm ci --no-audit --no-fund && npm test"
+    confirm: 2
+    budget: 15 runs

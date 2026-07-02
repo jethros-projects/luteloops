@@ -4204,8 +4204,105 @@ EOF
   fi
 }
 
+# ---------------------------------------------------------------- T50
+t_t50() { # action-contract: contrib/action maps lute's exit contract onto a CI
+          # job - verify.sh is the whole brain, administrable without GitHub
+  # --- a) the action's shape: composite, inputs wired to the script, evidence uploaded
+  python3 - "$ROOT/contrib/action/action.yml" <<'PY' || die "50a) action.yml shape broke"
+import sys, yaml
+a = yaml.safe_load(open(sys.argv[1]))
+assert a["runs"]["using"] == "composite", "not a composite action"
+assert set(a["inputs"]) == {"manifest", "agent", "install"}, sorted(a["inputs"])
+steps = a["runs"]["steps"]
+assert any("verify.sh" in (s.get("run") or "") for s in steps), "verify.sh not invoked"
+assert any("upload-artifact" in (s.get("uses") or "") and s.get("if") == "always()" for s in steps), \
+    "evidence upload missing or not always()"
+PY
+  [ -x "$ROOT/contrib/action/verify.sh" ] || die "50a) verify.sh is not executable"
+
+  bin="$WORK/t50-bin"; mkdir -p "$bin"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$LUTE" > "$bin/lute"; chmod +x "$bin/lute"
+
+  # --- b) a green manifest: exit 0, the closing message, outcome=closed
+  mkrepo "$WORK/t50b"
+  printf 'loop: green\nagent: "touch out.txt"\ntask: t\ndone_when: "test -f out.txt"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; PATH="$bin:$PATH" INPUT_INSTALL=none GITHUB_OUTPUT="$PWD/gh.out" \
+    bash "$ROOT/contrib/action/verify.sh" > o.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50b) green manifest exited $rc: $(cat o.out)"
+  grep -q 'all loops closed' o.out || die "50b) no closing message: $(cat o.out)"
+  grep -qx 'outcome=closed' gh.out || die "50b) GITHUB_OUTPUT lacks outcome=closed: $(cat gh.out)"
+
+  # --- c) a blocked manifest: exit 3, the cards printed, outcome=blocked
+  mkrepo "$WORK/t50c"
+  printf 'loop: stuck\nagent: "true"\ntask: t\ndone_when: "false"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  rc=0; PATH="$bin:$PATH" INPUT_INSTALL=none GITHUB_OUTPUT="$PWD/gh.out" \
+    bash "$ROOT/contrib/action/verify.sh" > o.out 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "50c) blocked manifest exited $rc, want 3: $(cat o.out)"
+  grep -q 'lute answer' o.out || die "50c) blocked run did not print the cards: $(cat o.out)"
+  grep -qx 'outcome=blocked' gh.out || die "50c) GITHUB_OUTPUT lacks outcome=blocked: $(cat gh.out)"
+
+  # --- d) the agent input threads through to lint and run
+  mkrepo "$WORK/t50d"
+  printf 'loop: threaded\ntask: t\ndone_when: "test -f out.txt"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; PATH="$bin:$PATH" INPUT_INSTALL=none INPUT_AGENT="touch out.txt" GITHUB_OUTPUT="$PWD/gh.out" \
+    bash "$ROOT/contrib/action/verify.sh" > o.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50d) agent input did not thread through: $(cat o.out)"
+  grep -qx 'outcome=closed' gh.out || die "50d) GITHUB_OUTPUT lacks outcome=closed: $(cat gh.out)"
+
+  # --- e) the recipe shape closes hermetically: repair-after-a-bump as the
+  #        recipes structure it (build loop, then protected suite with
+  #        confirm: 2), pure python standing in for npm/pip
+  mkrepo "$WORK/t50e"
+  mkdir -p tests
+  printf 'def add(a, b)\n    return a + b\n' > lib.py     # syntax error = broken build
+  printf 'import sys, lib\nsys.exit(0 if lib.add(2, 3) == 5 else 1)\n' > tests/test_lib.py
+  cat > lute.yaml <<EOF
+loop: bump-repair
+agent: "$FAKE"
+budget: 10 runs
+done_when: "PYTHONPATH=. python3 -B tests/test_lib.py"
+protected: ["tests/**"]
+loops:
+  - loop: fix-build
+    task: Make lib importable again.
+    done_when: "python3 -B -c 'import lib'"
+    budget: 3 runs
+  - loop: fix-tests
+    task: Make the suite pass. Do not touch the tests.
+    done_when: "PYTHONPATH=. python3 -B tests/test_lib.py"
+    confirm: 2
+    budget: 3 runs
+EOF
+  cat > playbook.json <<'EOF'
+{ "fix-build": { "1": [ {"write": {"path": "lib.py", "content": "def add(a, b):\n    return a - b  # imports, still wrong\n"}},
+                        {"journal": "run 1: fixed the syntax error."} ] },
+  "fix-tests": { "1": [ {"write": {"path": "lib.py", "content": "def add(a, b):\n    return a + b\n"}},
+                        {"journal": "run 1: fixed the math."} ] } }
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50e) recipe-shaped manifest failed lint: $(cat lint.out)"
+  grep -q '3 check(s)' lint.out || die "50e) lint did not administer all three exams: $(cat lint.out)"
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50e) recipe shape did not close: $(cat run.out)"
+  grep -q '"streak": "2/2"' .lute/events.jsonl || die "50e) confirm: 2 never reached its streak"
+
+  # --- f) every shipped recipe stays schema-valid, exercised the documented
+  #        way: copied into a repo as lute.yaml, then linted (checks skipped)
+  for recipe in "$ROOT"/contrib/recipes/*.yaml; do
+    mkrepo "$WORK/t50f-$(basename "$recipe" .yaml)"
+    cp "$recipe" lute.yaml
+    seal
+    rc=0; "$LUTE" lint --no-exec > lint.out 2>&1 || rc=$?
+    [ "$rc" -eq 0 ] || die "50f) shipped recipe $(basename "$recipe") fails lint: $(cat lint.out)"
+  done
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4257,6 +4354,7 @@ desc() {
     t47) echo "host-boundary  runner state, Git, answer, plan, judge, worktree, manifest, and config hardening" ;;
     t48) echo "ledger-locality run accounting is committed per branch (children own their ledger, merged like work); no flock artifact created or committed" ;;
     t49) echo "no-edit runs   an agent that changes nothing is named in events, console, and card; a run that edits is never flagged" ;;
+    t50) echo "wedge-kit      contrib/action maps lute's exit contract onto a CI job; the recipe shape closes hermetically; shipped recipes stay schema-valid" ;;
   esac
 }
 
