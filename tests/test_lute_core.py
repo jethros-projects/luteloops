@@ -983,7 +983,7 @@ class PlannerPromptTests(unittest.TestCase):
         self.assertIn("DAG planning mode", task)
         # The gate is honestly stated: --no-exec re-checks, full lint is the
         # author's job, and the embedded skill copy is authoritative.
-        self.assertIn("will not catch a missing tool", task)
+        self.assertIn("cannot catch an uncapped watcher", task)
         self.assertIn("authoritative skill text", task)
         self.assertIn("never a file whose editing is itself that loop's task", task)
 

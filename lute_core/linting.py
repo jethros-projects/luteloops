@@ -203,10 +203,16 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
     judge_cmd = ctx.config.get("judge")
     cage = ctx.config.get("cage")
     caged = bool(cage)
+    try:
+        # ls-files, not status: status collapses an untracked directory to one
+        # entry, hiding the files inside it from a per-file comparison.
+        tracked = set(checks.git.text("ls-files").splitlines())
+    except Exception:  # pragma: no cover - defensive for unusual git states
+        tracked = None
 
     budget_authority_loops: list[str] = []
 
-    def walk(loop: LoopSpec, inherited: str | None) -> None:
+    def walk(loop: LoopSpec, inherited: str | None, parent: LoopSpec | None = None) -> None:
         effective = loop.agent or inherited or default_agent
         if effective and not caged and not resolvable(effective):
             errors.append(f"{loop.id}: agent not found: {effective}")
@@ -227,8 +233,15 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
         if not caged and loop.task is not None and loop.budget.limits:
             budget_authority_loops.append(str(loop.id))
         for pattern in loop.protected:
-            if not protected_files([pattern]):
+            matched = protected_files([pattern])
+            if not matched:
                 warnings.append(f"{loop.id}: protected glob {pattern!r} matches no files")
+            for path in matched:
+                if tracked is not None and path not in tracked:
+                    warnings.append(
+                        f"{loop.id}: protected path {path} is untracked — protection restores committed "
+                        "originals, so the first check will quarantine and DELETE it; commit it first"
+                    )
         for check_path in local_check_paths(loop.done_when.command):
             if not protected_covers(check_path, list(loop.protected)):
                 warnings.append(
@@ -237,6 +250,14 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
                 )
         if loop.parallel and len(loop.children) < 2:
             warnings.append(f"{loop.id}: parallel with fewer than 2 children runs nothing concurrently")
+        # A child re-taking a TASK-BEARING parent's exact exam is ceremony: the
+        # parent already administers and repairs it. The task-less-parent
+        # repair pattern (aggregating root, child owns the fix) stays silent.
+        if parent is not None and parent.task is not None and loop.done_when.command == parent.done_when.command:
+            warnings.append(
+                f"{loop.id}: done_when equals its parent's while the parent has its own task — "
+                "give the child a narrower exam or fold its task into the parent"
+            )
         if is_placeholder_check(loop.done_when.command):
             warnings.append(f"{loop.id}: done_when looks like a placeholder; use an exam that measures the goal")
             if loop.parallel and loop.children:
@@ -289,7 +310,7 @@ def lint_manifest(root, schedules, ctx, checks, budget, *, default_agent, no_exe
         counts[cls] += 1
         rows.append(f"{cls:7} {loop.id}: {loop.done_when.command}")
         for child in loop.children:
-            walk(child, effective)
+            walk(child, effective, loop)
 
     walk(root, None)
     if budget_authority_loops:

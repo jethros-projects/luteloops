@@ -114,9 +114,10 @@ takes its own exam last.
 Rules that make exams trustworthy:
 
 - **Runnable now.** Full `lute lint` executes every exam once; the plan gate
-  `lute lint --no-exec` only syntax-checks commands and cannot catch a missing
-  tool or a watcher missing its time budget. Verify every command resolves in
-  this repo and run full `lute lint` yourself before calling a draft done. An
+  `lute lint --no-exec` checks shell syntax and that each command resolves on
+  this host, but executes nothing — it cannot catch a watcher missing its
+  time budget or a tool that resolves and then fails. Run full `lute lint`
+  yourself before calling a draft done. An
   exam that errors (typo, missing tool) is invalid. Prefer tools already in
   the repo - but only when they can fail: a declared test/build script that
   exits 0 unconditionally is a placeholder in disguise; note it in a comment
@@ -146,7 +147,9 @@ Rules that make exams trustworthy:
 - **Protect what the task could edit.** When a milestone's exam lives in files the task itself can touch (tests, fixtures, check scripts, `package.json`, `Makefile`), list them under `protected:` on that loop, for example `["tests/**", "scripts/check-*.sh"]`. Lute quarantines attempted edits to protected materials and restores trusted copies before checking - protection is enforcement, not advice. `protected:` is judged per loop against THAT loop's task: never list the files a task is supposed to edit (a protection warning naming the work product is a false positive - acknowledge in a comment, do not protect the file), and a file one loop legitimately edits should be protected on every later loop whose exam trusts it. Globs are repo-root-relative: `package.json` protects only the root file; use `**/package.json` for every package's. Lint warns whenever a done_when invokes a repo script not covered by that loop's own `protected:` - protection is per-loop, so cover the check script on every loop that calls it, parents included. When a script runner (`npm test`, `make check`) resolves through a file the task itself must edit, invoke the underlying command directly (`node tests/run.js`, not `npm test`) so the exam reads only protected materials.
 - **You may create exam materials while planning** (check scripts, golden
   files): they are contract, not product code - list them under `protected:`
-  and land them with the reviewed proposal. Never protect materials a WORKER
+  and COMMIT them (`git add`) with the reviewed proposal; an untracked
+  protected file is itself quarantine-deleted at the first check (lint
+  warns). Never protect materials a WORKER
   will create mid-run: protection restores committed originals from the
   branch base, so it quarantines and deletes run-created files. If the repo
   has no trustworthy exam materials, make creating them the first loop,
@@ -342,4 +345,4 @@ Answer every item yes before calling a draft done:
 7. Judges only where executable checks cannot capture the goal - and each has a rubric with citations, a different engine from the worker, `confirm: 2`, and a judge configured in `.lute/config.yaml`.
 8. Exam materials the task could edit are protected on every loop whose exam trusts them; no loop protects its own work product.
 9. Watchers using exit 75 have time budgets; every irreversible next step is gated (with `cage:` configured in `.lute/config.yaml`).
-10. Run full `lute lint lute.proposed.yaml` (the plan gate is `--no-exec` and only syntax-checks); resolve warnings you can act on, and if lint cannot run, say so and give the exact command.
+10. Run full `lute lint lute.proposed.yaml` (the plan gate is `--no-exec`: syntax and resolvability, nothing executed); resolve warnings you can act on, and if lint cannot run, say so and give the exact command.
