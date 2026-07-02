@@ -1,9 +1,17 @@
 """Trusted exam protection and quarantine.
 
 Lute lets agents edit freely, but protected exam material and runner control
-files must not redefine what "done" means.  This module snapshots trusted
-material, saves attempted edits for inspection, restores trusted copies, and
-lets checks run against the restored exam.
+files must not redefine what "done" means. This module snapshots that trusted
+material, sets aside any attempted edit for inspection, restores the trusted
+copy, and lets the check run against the restored exam.
+
+The unit of trust is a `FileRecord`: the shape and content of one watched path,
+read either from a committed tree (`source="git"`) or from the live worktree.
+Protection takes a `baseline` of records at the pinned ref, compares it against
+the worktree now, and quarantines-then-restores every path whose record differs.
+The file reads top-down as that pipeline: glob matching, the record model,
+reading a record (from the worktree, then from git), and the `Protection`
+service that assembles a baseline and enforces it.
 """
 
 from __future__ import annotations
@@ -117,6 +125,19 @@ def _lstree_entry(meta_b: bytes) -> tuple[str, int, str]:
 
 @dataclass(frozen=True)
 class FileRecord:
+    """The shape and content of one watched path, comparable across trees.
+
+    `kind` is the path's shape, one vocabulary whether read from git or the worktree:
+        file, symlink, gitlink  — a blob, a symlink, a submodule pointer
+        dir, empty-dir          — plain content, or an empty (uninitialized) mount
+        symlink-ancestor        — a path reachable only through a symlinked parent
+        unreadable, other       — a file we may not read; a device/socket/fifo
+    `source` is where it was read: "git" (a committed tree), "worktree" (live), or
+    "live" (a control file with no committed original). `digest` names the content
+    (a sha256, or the git object id when the blob is absent locally). Two records
+    are the same path iff their (kind, mode, digest) agree — submodules excepted,
+    which compare specially (see `_same`)."""
+
     path: str
     kind: str
     mode: int
@@ -137,6 +158,12 @@ class ProtectionBaseline:
     control_paths: tuple[str, ...]
     records: dict[str, FileRecord]
     watched_absent: tuple[str, ...]
+
+    @property
+    def watched(self) -> set[str]:
+        """Every path this baseline accounts for: those recorded at the pinned
+        ref, the control files it expected absent, and the control paths."""
+        return set(self.records) | set(self.watched_absent) | set(self.control_paths)
 
 
 @dataclass(frozen=True)
@@ -164,6 +191,14 @@ def _symlink_ancestor(path: str) -> str | None:
         if os.path.islink(cur):
             return cur
     return None
+
+
+# --- Submodules: repository boundaries, not content -------------------------
+# A submodule under a protected glob is a separate repository. Protection cannot
+# pin the bytes inside it (the agent owns that repo), so it treats the mount as a
+# boundary: pristine only when the checkout is clean at the commit the superproject
+# recorded. A plain directory, or a checkout with a modified tracked file, is a
+# change — restored, so nothing readable can be smuggled behind the boundary.
 
 
 def _submodule_git(path: str, *args: str) -> subprocess.CompletedProcess | None:
@@ -206,6 +241,20 @@ def _dir_is_empty(path: str) -> bool:
         return False  # unreadable: treat as non-empty, i.e. a change (fail closed)
 
 
+def _dir_record(path: str, mode: int) -> FileRecord:
+    """A directory is one of three things to protection: a submodule boundary
+    (a checkout, named by the clean commit it points at), an empty and therefore
+    uninitialized mount, or plain content."""
+    if os.path.lexists(os.path.join(path, ".git")) and (head := _submodule_head(path)):
+        return FileRecord(path, "gitlink", 0o160000, head, "worktree")
+    if _dir_is_empty(path):
+        return FileRecord(path, "empty-dir", mode, _sha(b"<empty-directory>"), "worktree")
+    return FileRecord(path, "dir", mode, _sha(b"<directory>"), "worktree", b"<directory>")
+
+
+# --- Reading a record from the live worktree --------------------------------
+
+
 def _current_record(path: str) -> FileRecord | None:
     if ancestor := _symlink_ancestor(path):
         raw = f"{ancestor}->{os.readlink(ancestor)}".encode()
@@ -229,15 +278,7 @@ def _current_record(path: str) -> FileRecord | None:
             return FileRecord(path, "unreadable", mode, _sha(raw), "worktree", raw)
         return FileRecord(path, "file", mode, _sha(raw), "worktree", raw)
     if stat.S_ISDIR(st.st_mode):
-        # A submodule mounts as a directory. If it is a checkout, its identity is
-        # the commit it points at; an empty directory is an uninitialized one.
-        # Anything else is a plain directory — content, not a boundary.
-        if os.path.lexists(os.path.join(path, ".git")) and (head := _submodule_head(path)):
-            return FileRecord(path, "gitlink", 0o160000, head, "worktree")
-        if _dir_is_empty(path):
-            return FileRecord(path, "empty-dir", mode, _sha(b"<empty-directory>"), "worktree")
-        raw = b"<directory>"
-        return FileRecord(path, "dir", mode, _sha(raw), "worktree", raw)
+        return _dir_record(path, mode)
     raw = f"<mode:{st.st_mode}>".encode()
     return FileRecord(path, "other", mode, _sha(raw), "worktree", raw)
 
@@ -254,6 +295,9 @@ def _same(a: FileRecord | None, b: FileRecord | None) -> bool:
         # with a dirty tree is the residual noted in THREAT_MODEL.md.)
         return (b.kind == "gitlink" and a.digest == b.digest) or b.kind == "empty-dir"
     return (a.kind, a.mode, a.digest) == (b.kind, b.mode, b.digest)
+
+
+# --- Reading a record from git, and the Protection service ------------------
 
 
 class Protection:
@@ -295,20 +339,18 @@ class Protection:
         )
 
     def control_paths(self) -> list[str]:
-        paths: list[str] = []
+        # The manifest and .lute/config.yaml are trusted control inputs. Watch
+        # each both as named and via its real path, so a symlinked control file
+        # cannot dodge the guard by pointing the check somewhere else.
+        inputs = [self.ctx.paths.config]
         if self.ctx.manifest_path:
-            manifest = self.repo_relative_control_path(self.ctx.manifest_path)
-            if manifest:
-                paths.append(manifest)
-            real_manifest = self.repo_relative_control_path(os.path.realpath(self.ctx.manifest_path))
-            if real_manifest:
-                paths.append(real_manifest)
-        config = self.repo_relative_control_path(self.ctx.paths.config)
-        if config:
-            paths.append(config)
-        real_config = self.repo_relative_control_path(os.path.realpath(self.ctx.paths.config))
-        if real_config:
-            paths.append(real_config)
+            inputs.append(self.ctx.manifest_path)
+        paths = [
+            rel
+            for control in inputs
+            for candidate in (control, os.path.realpath(control))
+            if (rel := self.repo_relative_control_path(candidate))
+        ]
         return sorted(set(paths))
 
     def repo_relative_control_path(self, path: str) -> str | None:
@@ -361,20 +403,25 @@ class Protection:
         return FileRecord(path, kind, _git_record_mode(full_mode, kind), digest, "git", raw)
 
     def changed_paths(self, baseline: ProtectionBaseline) -> list[str]:
-        watched = set(baseline.records) | set(baseline.watched_absent) | set(baseline.control_paths)
+        # Compare the pinned baseline against the live worktree now. Beyond the
+        # paths the baseline already watches, the protected globs may match new
+        # files an agent created, so we walk them too (skipping submodule
+        # boundaries, which are recorded and compared, never descended into).
+        watched = baseline.watched
         if baseline.protected_globs:
             boundaries = {path for path, record in baseline.records.items() if record.kind == "gitlink"}
             watched |= set(protected_files(list(baseline.protected_globs), boundaries))
-        changed = [path for path in watched if not _same(baseline.records.get(path), _current_record(path))]
-        return sorted(changed)
+        return sorted(path for path in watched if not _same(baseline.records.get(path), _current_record(path)))
 
     def changed_paths_at_ref(self, baseline: ProtectionBaseline, ref: str) -> list[str]:
+        # The same comparison, but against another committed tree instead of the
+        # live worktree — how land and merge audit a branch ref-to-ref.
         records = dict(self.git_records_at(ref, list(baseline.protected_globs)))
         for path in baseline.control_paths:
             rec = self.git_record_at(ref, path)
             if rec is not None:
                 records[path] = rec
-        watched = set(baseline.records) | set(baseline.watched_absent) | set(baseline.control_paths) | set(records)
+        watched = baseline.watched | set(records)
         return sorted(path for path in watched if not _same(baseline.records.get(path), records.get(path)))
 
     def enforce(self, loop_id: str, run_id: str, baseline: ProtectionBaseline) -> QuarantineResult | None:
