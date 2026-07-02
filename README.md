@@ -135,6 +135,14 @@ That is the whole product. Agent writes. Lute checks. Git records. Budgets stop
 runaway loops. Cards pull you back in when the model needs help. The runner
 never trusts the agent's confidence or exit code. The exam decides.
 
+Two demos run the real thing:
+
+```sh
+bash contrib/demo-catch-cheat.sh   # hermetic: a scripted agent deletes the failing
+                                   # test; lute quarantines the edit and refuses the pass
+bash contrib/demo.sh               # live: codex fixes a rigged repo, nested exams close
+```
+
 **"Isn't this just a bash loop?"** At the kernel, yes — `contrib/lute.sh` is a
 thirty-line one, and it passes Lute's first two notches. The product is
 everything the thirty lines cannot say: the agent cannot pass by editing the

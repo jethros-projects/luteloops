@@ -2563,7 +2563,9 @@ EOF
   #        of degrading to "could not confirm". Only python3 + git ride along.
   mkrepo "$WORK/t32k"
   bin="$WORK/t32k-bin"; mkdir -p "$bin"
-  ln -sf "$(command -v python3)" "$bin/python3"
+  # A wrapper, not a symlink: a venv python3 found via symlink loses its
+  # pyvenv.cfg (and with it PyYAML); exec-ing the real path keeps the venv.
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v python3)" > "$bin/python3"; chmod +x "$bin/python3"
   ln -sf "$(command -v git)" "$bin/git"
   cat > lute.yaml <<EOF
 loop: cron-stop
