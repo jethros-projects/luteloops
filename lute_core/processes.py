@@ -1,4 +1,11 @@
-"""Best-effort process identity and stopping helpers."""
+"""Best-effort process identity, stopping, and detached spawning.
+
+Everything here is host-level and best-effort: it works from a pid and what the
+OS will tell us about it. Three concerns, in order: **Identity** — is a pid
+alive, and is it the runner a lock/pid file claims (`owns`, the two-factor test
+`lute stop` and orphan-reaping share)? **Stopping** — tear a process and its
+group down cleanly. **Spawning** — launch a detached child in its own session.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +19,9 @@ import time
 from typing import Sequence
 
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+# --- Identity ---------------------------------------------------------------
 
 
 def pid_alive(pid: int | None) -> bool:
@@ -107,6 +117,9 @@ def owns(pid: int | None, repo_root: str, marker: str) -> bool | None:
     return None
 
 
+# --- Stopping ---------------------------------------------------------------
+
+
 def descendants(pid: int) -> list[int]:
     seen: set[int] = set()
     frontier = [pid]
@@ -179,6 +192,9 @@ def stop_run(pid: int, grace: int = 120) -> bool:
             return True
         time.sleep(0.1)
     return stop_group(pid)
+
+
+# --- Spawning ---------------------------------------------------------------
 
 
 def open_output(path: str, *, append: bool):
