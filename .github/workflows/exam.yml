@@ -41,3 +41,4 @@ jobs:
       - run: python -m pip install build twine
       - run: python -m build
       - run: twine check dist/*
+      - run: bash scripts/check-links.sh
