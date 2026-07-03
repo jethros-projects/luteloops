@@ -78,35 +78,54 @@ class AgentRunner:
     def build_prompt(self, loop: LoopSpec, agent_command: str, tail_text: str, answer: str | None) -> str:
         # Frame the failure honestly: a silent (boolean) check that printed nothing
         # names its exit-only signal (no empty box); a shown-in-full output claims
-        # no elision; only a genuinely-elided excerpt says so.
+        # no truncation; only a genuinely-elided or clipped excerpt says so. The
+        # source-of-truth step (2) adapts to each: read the files vs re-run.
         cmd = loop.done_when.command
-        if not tail_text.strip():
+        silent = not tail_text.strip()
+        if silent:
             check_seg = (
                 f"The check `{cmd}` is failing — it printed nothing, so it signals only "
-                "via its exit status; inspect the files it names, or re-run it yourself."
+                "via its exit status."
             )
-        elif "lines elided" in tail_text:
-            check_seg = (
-                f"The check `{cmd}` is failing. An excerpt of its output (first and last "
-                f"lines; the middle is elided — re-run the check for the full log):\n"
-                f"<check_output>\n{tail_text}\n</check_output>"
+            source_step = (
+                f"Re-run `{cmd}` yourself and inspect the files it touches; work from what "
+                "you read, not from guesses."
             )
         else:
+            if "lines elided" in tail_text:
+                frame = ("An excerpt of its output (first and last lines; the middle is "
+                         "elided — re-run the check for the full log)")
+                whence = "excerpt"
+            elif "long lines clipped" in tail_text:
+                frame = ("Its output (over-long lines clipped to their first bytes — "
+                         "re-run the check for the full log)")
+                whence = "output"
+            else:
+                frame = "Its output"
+                whence = "output"
             check_seg = (
-                f"The check `{cmd}` is failing. Its output:\n"
+                f"The check `{cmd}` is failing. {frame}:\n"
                 f"<check_output>\n{tail_text}\n</check_output>"
+            )
+            source_step = (
+                f"Open the files the output names; work from what you read, not from the "
+                f"{whence} alone."
             )
         segs = [f"You are one iteration of a loop. Goal: {loop.task}", check_seg]
         if answer:
             segs.append(f"A human reviewed the last escalation and said: {answer}")
         journal = f".lute/journal/{loop.id}.md"
         segs.append(
-            f"Start by reading {journal} — your past attempts live there. You may re-run "
-            f"`{loop.done_when.command}` to check your work; the runner re-runs it and its "
-            "exit code is the only verdict, so don't stop on a fix you haven't seen pass. "
-            f"Finish by appending 1–3 lines to {journal}: what you tried, what you learned, "
-            "what the next run must not retry (and, if a human gave direction this run, its "
-            "substance so the next run still honours it). Compact it if it passes ~100 lines."
+            "This run:\n"
+            f"1. Read {journal} first — your only memory across runs; never retry what it "
+            "says already failed.\n"
+            f"2. {source_step}\n"
+            f"3. Fix, then re-run `{cmd}` — the runner re-runs it and its exit code is the "
+            "only verdict, so don't stop on a fix you haven't seen pass.\n"
+            f"4. Append 1–3 lines to {journal}: what you tried, what you learned, what the "
+            "next run must not retry and should try first (and, if a human gave direction "
+            "this run, its substance so the next run still honours it). Compact it if it "
+            "passes ~100 lines."
         )
         prompt = "\n\n".join(segs)
         if self.ctx.nagged.get(str(loop.id)):

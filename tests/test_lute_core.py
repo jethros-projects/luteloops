@@ -883,26 +883,60 @@ class LintCheckPathTests(unittest.TestCase):
 
 
 class CheckOutputExcerptTests(unittest.TestCase):
-    """excerpt() presents a failing check's output as head+tail so a top-anchored
-    diagnostic is never evicted, collapses carriage-return redraws, and passes
-    short output through unchanged."""
+    """excerpt() presents a failing check's output as a BYTE-budgeted head+tail so
+    a top-anchored diagnostic is never evicted, a few very long lines can't blow
+    up the prompt, buried failures that fit the budget survive whole, and carriage
+    -return redraws collapse. Deterministic, no model in the loop."""
 
     def test_short_output_passes_through(self):
         text = "line1\nline2\nline3"
         self.assertEqual(formatting.excerpt(text), text)
 
     def test_long_output_keeps_head_and_tail_with_marker(self):
-        lines = ["HEAD-DIAGNOSTIC"] + [f"noise {i}" for i in range(200)] + ["TAIL-SUMMARY"]
-        out = formatting.excerpt("\n".join(lines))
+        lines = ["HEAD-DIAGNOSTIC"] + [f"noise {i:03d} " + "x" * 50 for i in range(200)] + ["TAIL-SUMMARY"]
+        out = formatting.excerpt("\n".join(lines))  # ~12 KB, over budget
         self.assertIn("HEAD-DIAGNOSTIC", out)
         self.assertIn("TAIL-SUMMARY", out)
         self.assertIn("lines elided", out)
-        # far smaller than the raw 202 lines
         self.assertLess(len(out.splitlines()), 100)
 
+    def test_budget_is_bytes_not_lines(self):
+        # a handful of enormous lines: line-count would let this through whole; the
+        # byte budget must clamp it so it cannot flood the prompt
+        out = formatting.excerpt("\n".join("x" * 100_000 for _ in range(60)))  # ~6 MB raw
+        self.assertLessEqual(len(out.encode("utf-8")), 5300)
+
+    def test_over_long_single_line_is_clipped_not_dropped(self):
+        out = formatting.excerpt("ERROR near the start\n" + "y" * 50_000)
+        self.assertIn("ERROR near the start", out)
+        self.assertIn("clipped]", out)
+        self.assertIn("long lines clipped", out)
+        self.assertLessEqual(len(out.encode("utf-8")), 5300)
+
+    def test_moderately_long_single_line_survives_whole(self):
+        # a 3 KB error line fits the budget: it must not be clipped at all
+        line = "AssertionError: " + "z" * 3000
+        self.assertEqual(formatting.excerpt(line), line)
+
+    def test_buried_failure_within_budget_survives_verbatim(self):
+        lines = ["PASS test_a ok"] * 100 + ["FAIL test_boundary: expected 5 got 4"] + ["PASS test_z ok"] * 100
+        out = formatting.excerpt("\n".join(lines))  # ~3 KB, under budget
+        self.assertEqual(out, "\n".join(lines))
+        self.assertIn("FAIL test_boundary", out)
+
+    def test_elided_count_is_at_least_one_never_zero(self):
+        lines = [f"line {i:04d} " + "w" * 60 for i in range(120)]  # just over budget
+        out = formatting.excerpt("\n".join(lines))
+        import re
+        m = re.search(r"… (\d+) lines elided", out)
+        self.assertIsNotNone(m)
+        self.assertGreaterEqual(int(m.group(1)), 1)
+
+    def test_blowup_input_is_deterministic(self):
+        text = "\n".join("q" * 90_000 for _ in range(40))
+        self.assertEqual(formatting.excerpt(text), formatting.excerpt(text))
+
     def test_carriage_return_redraw_collapses_to_final_frame(self):
-        # a progress bar rewriting one line: only the final frame survives, and it
-        # is not an empty line
         out = formatting.excerpt("building 10%\rbuilding 90%\rERROR: link failed")
         self.assertIn("ERROR: link failed", out)
         self.assertNotIn("building 10%", out)
@@ -936,6 +970,17 @@ class JudgePromptTests(unittest.TestCase):
 
     def test_instruction_carries_a_worked_example(self):
         self.assertIn("Example", judge.INSTRUCTION)
+        self.assertIn("FAIL — —", judge.INSTRUCTION)  # the missing-evidence citation shape
+
+    def test_diff_is_wrapped_in_a_structural_tag_around_the_markers(self):
+        p = judge.payload("r", "+ a line")
+        self.assertLess(p.index("<untrusted_diff>"), p.index("BEGIN UNTRUSTED DIFF"))
+        self.assertLess(p.index("BEGIN UNTRUSTED DIFF"), p.index("END UNTRUSTED DIFF"))
+        self.assertLess(p.index("END UNTRUSTED DIFF"), p.index("</untrusted_diff>"))
+
+    def test_instruction_labels_the_diff_provenance_and_report_slot(self):
+        self.assertIn("unsupervised coding agent", judge.INSTRUCTION)
+        self.assertIn("report it on a final line", judge.INSTRUCTION)
 
 
 def _worker_prompt(task, cmd, tail_text, answer=None, nag=False):
@@ -967,6 +1012,29 @@ class WorkerPromptTests(unittest.TestCase):
         self.assertIn("The check `pytest -q` is failing", p)  # t8 substring
         self.assertIn(".lute/journal/fix-loop.md", p)  # fake_agent extracts the id here
 
+    def test_run_contract_is_a_numbered_block(self):
+        p = _worker_prompt("fix it", "pytest -q", "E   assert 1 == 2")
+        self.assertIn("This run:", p)
+        for step in ("1.", "2.", "3.", "4."):
+            self.assertIn(step, p)
+
+    def test_verify_step_is_required_not_permissive(self):
+        # the stopping-condition form beat "you may re-run" in the tournament
+        p = _worker_prompt("fix it", "pytest -q", "E   assert 1 == 2")
+        self.assertNotIn("You may re-run", p)
+        self.assertIn("don't stop on a fix you haven't seen pass", p)
+
+    def test_journal_step_nudges_what_to_try_next(self):
+        p = _worker_prompt("fix it", "pytest -q", "E   assert 1 == 2")
+        self.assertIn("should try first", p)  # W7 plan nudge
+
+    def test_open_files_step_is_branch_aware(self):
+        shown = _worker_prompt("fix it", "pytest -q", "E   assert 1 == 2")
+        self.assertIn("the files the output names", shown)
+        silent = _worker_prompt("make it exist", "test -f out.txt", "")
+        self.assertIn("inspect the files it touches", silent)
+        self.assertNotIn("the files the output names", silent)
+
     def test_short_output_does_not_claim_an_elided_middle(self):
         # a fully-shown short output must not carry the "middle is elided" header —
         # that would be a false signal inviting a wasted re-run
@@ -974,9 +1042,15 @@ class WorkerPromptTests(unittest.TestCase):
         self.assertNotIn("elided", p)
 
     def test_long_output_claims_the_elided_middle(self):
-        excerpted = formatting.excerpt("\n".join(["HEAD"] + [f"n{i}" for i in range(200)] + ["TAIL"]))
+        excerpted = formatting.excerpt("\n".join(["HEAD"] + [f"noise {i:03d} " + "x" * 50 for i in range(200)] + ["TAIL"]))
         p = _worker_prompt("fix it", "pytest -q", excerpted)
         self.assertIn("elided", p)
+
+    def test_clipped_output_is_framed_as_clipped_not_elided(self):
+        clipped = "some output\n… 2 long lines clipped — re-run the check for the full log …"
+        p = _worker_prompt("fix it", "pytest -q", clipped)
+        self.assertIn("clipped", p)
+        self.assertNotIn("elided", p)
 
     def test_silent_check_gets_an_exit_only_sentinel(self):
         p = _worker_prompt("make it exist", "test -f out.txt", "")
