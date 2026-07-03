@@ -19,7 +19,10 @@ register the server (`docs/INTEGRATIONS.md`) or install lute.
 
 1. **A clear finish line exists** — one shell command whose exit 0 means done
    (`pytest -q`, `npm run build`, `! grep -rn 'legacyApi' src/`). If you cannot
-   name that command, this is not a lute job.
+   name that command, this is not a lute job. Make the check strict against
+   evasion but robust in form: prefer pattern-tolerant greps over brittle exact
+   ones, and remember a negated `! grep` treats a grep *error* (e.g. a missing
+   path) as a pass.
 2. **The work is grindy and bounded** — repair, upgrade, migration, keep-green
    maintenance; the kind of thing that takes several iterations of edit-and-check.
 3. **Running it to completion is fine** — the user wants the result, not to watch
@@ -36,10 +39,13 @@ register the server (`docs/INTEGRATIONS.md`) or install lute.
 
 **A single check → `lute_once`.** No manifest needed.
 - `task`: what one iteration should do. `until`: the shell check. `agent`: the
-  engine lute drives — `codex exec --sandbox workspace-write`, or
-  `claude -p --permission-mode acceptEdits` (full command power like installs
-  needs `claude -p --dangerously-skip-permissions`, best inside a cage). `budget`:
-  cap it (e.g. `20 runs`) so it can't run away.
+  engine lute drives. Pick it by what the task needs, up front: edit-only work
+  takes `codex exec --sandbox workspace-write` or
+  `claude -p --permission-mode acceptEdits`; a task that must run commands
+  (installs, migrations, `npm install`) needs full command/network power —
+  choose `claude -p --dangerously-skip-permissions` inside a cage rather than
+  firing the sandboxed engine and hoping it can install. `budget`: cap it
+  (e.g. `20 runs`) so it can't run away.
 - It detaches and returns fast. Then poll `lute_watch` (JSON: `outcome` is
   `running`/`closed`/`blocked`/`gated`).
 

@@ -21,8 +21,13 @@ or when the user is steering turn by turn. When in doubt, do it yourself.
 
 ## How
 
-- A single check: `lute_once` with `task`, `until` (the check), `agent`
-  (`codex exec --sandbox workspace-write`), and a `budget` (e.g. `20 runs`). It
+- A single check: `lute_once` with `task`, `until` (the check), `agent`, and a
+  `budget` (e.g. `20 runs`). Pick the engine by what the task needs, up front:
+  edit-only work takes `codex exec --sandbox workspace-write`; a task that must
+  run commands (installs, migrations) needs network/command power — enable it
+  (`-c sandbox_workspace_write.network_access=true`) or use a caged full-power
+  engine, rather than firing the sandbox and hoping. Make the check strict but
+  robust (pattern-tolerant greps; `! grep` treats a grep error as a pass). It
   detaches; poll `lute_watch` (JSON `outcome`).
 - A multi-step goal: `lute_plan "<goal>"` drafts `lute.proposed.yaml`; review it,
   then `lute_run`.
