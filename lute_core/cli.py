@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from importlib import resources
 
@@ -76,6 +77,7 @@ _USAGE_GROUPS = (
         ("quarantine [list]", "inspect edits held back from protected exams"),
         ("cron sync|remove", "install the schedules: block into your crontab"),
         ("mcp", "serve every verb as MCP tools (Claude Code, Codex)"),
+        ("upgrade [--check]", "update lute to the latest release (pipx / pip / checkout)"),
     )),
 )
 
@@ -131,6 +133,10 @@ HELP = {
     "  Emits an in-toto Statement (stdout) binding the pinned exam's hash, the base and\n"
     "  head SHAs, the run count, and a hash chain over the events. --verify re-derives\n"
     "  every fact from the repo and refuses on the first mismatch, naming it.",
+    "upgrade": "lute upgrade [--check]: update lute to the latest published release.\n"
+    "  Detects how lute was installed from where the package lives — pipx, a plain\n"
+    "  pip environment, or a source checkout — and runs the matching upgrade in place.\n"
+    "  --check  print the detected method and the exact command, but run nothing.",
 }
 
 QID_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -698,6 +704,52 @@ def cmd_cron(args: list[str]) -> int:
     return 0
 
 
+def _detect_upgrade() -> tuple[str, list[str] | None, str]:
+    """How was this lute installed, and what upgrades it in place?
+
+    Returns (label, argv, hint): `argv` is the command to run (None when the
+    tool it needs is missing), `hint` is the by-hand line to show either way.
+    The signal is where the running package lives, so no manifest or network is
+    touched — the same interpreter that imported us is the one to upgrade.
+    """
+    package = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(package)
+    prefix_parts = os.path.abspath(sys.prefix).split(os.sep)
+    # A source checkout (or an editable install of one): git owns the version.
+    if os.path.exists(os.path.join(repo, "pyproject.toml")) and os.path.isdir(os.path.join(repo, ".git")):
+        argv = ["git", "-C", repo, "pull", "--ff-only"] if shutil.which("git") else None
+        return ("a source checkout", argv, f"cd {repo} && git pull")
+    # A pipx-managed install: pipx keeps its own records, so drive it through
+    # pipx, never pip (raw pip in a pipx venv desyncs pipx's metadata).
+    if "pipx" in prefix_parts:
+        argv = ["pipx", "upgrade", "luteloops"] if shutil.which("pipx") else None
+        return ("pipx", argv, "pipx upgrade luteloops")
+    # Anything else — the one-paste installer's private venv, or a plain pip
+    # install — upgrades in place from PyPI via this very interpreter, whose
+    # bin/ is exactly what `lute` on your PATH points at.
+    argv = [sys.executable, "-m", "pip", "install", "--upgrade", "luteloops"]
+    return ("pip", argv, f"{sys.executable} -m pip install --upgrade luteloops")
+
+
+def cmd_upgrade(args: list[str]) -> int:
+    pos, opts = parse(args, set(), {"--check"})
+    need_pos(pos, "usage: lute upgrade [--check]", 0, 0)
+    label, argv, hint = _detect_upgrade()
+    print(f"{VERSION} · installed via {label}")
+    if argv is None:
+        print(f"upgrade by hand: {render.cmd(hint)}")
+        return 1
+    print(f"upgrade: {render.cmd(' '.join(argv))}")
+    if opts.get("check"):
+        return 0
+    result = subprocess.run(argv)
+    if result.returncode == 0:
+        print(f"{render.ok('upgraded')}; confirm with: {render.cmd('lute --version')}")
+        return 0
+    print(f"{render.err('upgrade failed')} (exit {result.returncode}); by hand: {render.cmd(hint)}", file=sys.stderr)
+    return result.returncode
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     for stream in (sys.stdout, sys.stderr):
@@ -729,6 +781,7 @@ def main(argv=None) -> int:
         "attest": cmd_attest,
         "quarantine": cmd_quarantine,
         "mcp": cmd_mcp,
+        "upgrade": cmd_upgrade,
     }
     if argv and argv[0] not in commands:
         near = difflib.get_close_matches(argv[0], commands, 1)
