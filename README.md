@@ -1,6 +1,11 @@
-# Lute Loops v0.1.0
+# Lute
+
+[![exam](https://github.com/jethros-projects/luteloops/actions/workflows/exam.yml/badge.svg)](https://github.com/jethros-projects/luteloops/actions/workflows/exam.yml)
 
 > Turtles all the way down
+
+**In one sentence:** Lute turns "I think the agent is done" into "the exam
+passed, the work is on a branch, and the transcript is inspectable."
 
 AI coding agents changed the bottleneck. The hard part is no longer getting a
 model to write code. The hard part is proving the code is actually done.
@@ -11,38 +16,107 @@ same dead end?
 
 **Lute is the missing primitive: a while-loop for agents with a real exam.**
 Give it any CLI agent that reads stdin and edits the working directory
-(`claude -p`, `codex`, a shell script, your own tool). Lute runs the agent,
-re-runs the check, commits the attempt, and repeats until the machine-checkable
-`done_when` passes.
+(`codex exec`, `claude -p`, a shell script, your own tool). Lute runs the
+agent, re-runs the check, commits the attempt, and repeats until the
+machine-checkable `done_when` passes.
 
 It is deliberately plain. A Lute run is just your repo, a `lute.yaml`, a git
 branch, logs, cards, and checks.
 The agent can be clever. The runner stays boring. That is the point.
 
-**In one sentence:** Lute turns "I think the agent is done" into "the exam
-passed, the work is on a branch, and the transcript is inspectable."
+## See It Work
 
-**Who this is for:**
+```text
+You: lute once --until "pytest -q" --agent "codex exec --sandbox workspace-write" -- "fix the failing tests"
 
-- **Founders and solo builders** who want AI agents to grind through real work
-  without pretending a vibes-only answer is done
-- **Staff engineers and maintainers** running upgrades, migrations, bug fixes,
-  release prep, or test repair across a repo
-- **Teams using Claude, Codex, or custom agents** who want one shared finish
-  line: shell checks, budgets, gates, and human escalation
-- **People who like small tools**: everything important is in git, `.lute/`,
-  `INBOX/`, and the files your agent changed
+Lute: check failed. Starting run 1 on branch lute/once.
+Agent: edits app.py, appends the journal, exits.
+Lute: pytest still fails. Commit the attempt. Start run 2.
+Agent: fixes the edge case it missed.
+Lute: pytest passes. Commit the close. Done.
+```
+
+That is the whole product. Agent writes. Lute checks. Git records. Budgets stop
+runaway loops. Cards pull you back in when the model needs help. The runner
+never trusts the agent's confidence or exit code. The exam decides.
+
+Two demos run the real thing:
+
+```sh
+bash contrib/demo-catch-cheat.sh   # hermetic: a scripted agent deletes the failing
+                                   # test; lute quarantines the edit and refuses the pass
+bash contrib/demo.sh               # live: codex fixes a rigged repo, nested exams close
+```
+
+**"Isn't this just a bash loop?"** At the kernel, yes — `contrib/lute.sh` is a
+thirty-line one, and it passes Lute's first two notches. The product is
+everything the thirty lines cannot say: the agent cannot pass by editing the
+exam (tampered materials are quarantined and restored), cannot buy budget by
+rewriting the ledger (accounting is re-derived from committed history), cannot
+end the loop by *sounding* done (only the runner's own re-run of `done_when`
+closes a loop), and cannot fail silently forever (budgets become cards in
+`INBOX/`). How that differs from ralph-style loops, Aider, vendor goal
+features, and plain CI is spelled out, both directions, in
+[docs/COMPARED.md](docs/COMPARED.md).
+
+## Install: One Paste
+
+Paste this in a terminal to install Lute:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/install.sh | bash
+```
+
+Uninstall just the tool, leaving project repos, `.lute/`, `INBOX/`, branches,
+logs, and crontab entries alone:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/uninstall.sh | bash
+```
+
+Or ask Codex/Claude Code:
+
+```text
+Install Lute from https://github.com/jethros-projects/luteloops by running the project installer. Verify with lute --help.
+```
+
+When the PyPI package is published, Python 3.10+ only:
+
+```sh
+pipx install luteloops
+lute --help
+```
+
+To install the tagged release directly:
+
+```sh
+pipx install git+https://github.com/jethros-projects/luteloops.git@v0.2.0
+```
+
+Or run it straight from a checkout. The executable is a tiny `lute` script, and
+the runtime stays Python standard library + PyYAML:
+
+```sh
+python3 -m pip install pyyaml      # only needed for checkout-style use
+python3 lute --help                # zero-install: run it from the checkout
+export PATH="$PWD:$PATH"           # optional: keep this checkout on PATH
+```
+
+Keep `lute`, `lute_core/`, and `luteloops/` together for checkout-style use;
+the script is intentionally tiny and imports the package next to it.
 
 ## Quick Start
 
-1. Install Lute
-2. Try a one-shot loop against a real check
-3. For bigger work, write or generate a `lute.yaml`
-4. Let the loop run until it closes, blocks, or asks for approval
+1. Try a one-shot loop against a real check
+2. For bigger work, write or generate a `lute.yaml`
+3. Let the loop run until it closes, blocks, or asks for approval
 
 ```sh
-lute once --until "pytest -q" --agent "claude -p" -- "make the failing tests pass"
+lute once --until "pytest -q" --agent "codex exec --sandbox workspace-write" -- "make the failing tests pass"
 ```
+
+(Claude Code as the engine: `--agent "claude -p --permission-mode acceptEdits"`.
+The flags matter — see [the two engine gotchas](#the-agent-contract) below.)
 
 `once` writes no `lute.yaml`: it runs the agent on a throwaway `lute/once`
 branch until `--until` exits 0, then stops. The check is mandatory. That is
@@ -68,67 +142,26 @@ root `AGENTS.md` guidance. It then gives the agent that briefing plus the
 packaged luteloops skill. Run `lute init --skill` only when you want a local
 copy to inspect or customize.
 
-## Install: One Paste
+**Who this is for:**
 
-Paste this in a terminal to install Lute:
+- **Founders and solo builders** who want AI agents to grind through real work
+  without pretending a vibes-only answer is done
+- **Staff engineers and maintainers** running upgrades, migrations, bug fixes,
+  release prep, or test repair across a repo
+- **Teams using Claude, Codex, or custom agents** who want one shared finish
+  line: shell checks, budgets, gates, and human escalation
+- **People who like small tools**: everything important is in git, `.lute/`,
+  `INBOX/`, and the files your agent changed
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.1.0/scripts/install.sh | bash
-```
+## Where Next
 
-Uninstall just the tool, leaving project repos, `.lute/`, `INBOX/`, branches,
-logs, and crontab entries alone:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.1.0/scripts/uninstall.sh | bash
-```
-
-Or ask Codex/Claude Code:
-
-```text
-Install Lute from https://github.com/jethros-projects/luteloops by running the project installer. Verify with lute --help.
-```
-
-When the PyPI package is published, Python 3.10+ only:
-
-```sh
-pipx install luteloops
-lute --help
-```
-
-To install the tagged release directly:
-
-```sh
-pipx install git+https://github.com/jethros-projects/luteloops.git@v0.1.0
-```
-
-Or run it straight from a checkout. The executable is a tiny `lute` script, and
-the runtime stays Python standard library + PyYAML:
-
-```sh
-python3 -m pip install pyyaml      # only needed for checkout-style use
-python3 lute --help                # zero-install: run it from the checkout
-export PATH="$PWD:$PATH"           # optional: keep this checkout on PATH
-```
-
-Keep `lute`, `lute_core/`, and `luteloops/` together for checkout-style use;
-the script is intentionally tiny and imports the package next to it.
-
-## See It Work
-
-```text
-You: lute once --until "pytest -q" --agent "claude -p" -- "fix the failing tests"
-
-Lute: check failed. Starting run 1 on branch lute/once.
-Agent: edits app.py, appends the journal, exits.
-Lute: pytest still fails. Commit the attempt. Start run 2.
-Agent: fixes the edge case it missed.
-Lute: pytest passes. Commit the close. Done.
-```
-
-That is the whole product. Agent writes. Lute checks. Git records. Budgets stop
-runaway loops. Cards pull you back in when the model needs help. The runner
-never trusts the agent's confidence or exit code. The exam decides.
+- [docs/COMPARED.md](docs/COMPARED.md) — vs a bare loop, ralph-style loops, Aider, vendor goal features, and plain CI; both directions, by mechanism
+- [contrib/recipes/](contrib/recipes/) — verified upgrades ready to adapt: React major, a bot's dependency bump, Django major, Node LTS
+- [docs/UPGRADE-BOT.md](docs/UPGRADE-BOT.md) — drive Renovate/Dependabot PRs with a loop: locally, by cron, or in CI via [contrib/action](contrib/action/)
+- [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) — reach lute from Claude Code and Codex: every verb as an MCP tool (`lute mcp`) plus a skill/AGENTS.md that hands walk-away tasks to lute
+- [docs/ATTESTATION.md](docs/ATTESTATION.md) — the verdict as a verifiable, signable artifact
+- [THREAT_MODEL.md](THREAT_MODEL.md) — what holds uncaged, what needs the cage, what is out of scope
+- [INVARIANT.md](INVARIANT.md) — the one claim everything defends, mapped to the notches that enforce it
 
 ## The Loop
 
@@ -161,7 +194,7 @@ running the final exam for the whole project.
 
 ```yaml
 loop: billing-migration
-agent: claude -p
+agent: claude -p --permission-mode acceptEdits
 budget: 72h
 done_when: "pytest tests/billing tests/api && npm test"
 loops:
@@ -242,6 +275,7 @@ runs only the compiled proposal after you review and rename it.
 | `lute inbox` | list every blocked/gated loop with the exact command to answer it |
 | `lute answer <loop> "..."` | reply to a card in `INBOX/`; blocked-loop answers are injected into the next run, while gated loops seal only on exact `approve` |
 | `lute judge -- "<rubric>"` | run the configured judge once against HEAD's diff — the same oracle behind `done_when: "judge: ..."`; exits 0 only when the grader's first line is `PASS` |
+| `lute attest [--verify F]` | emit (or verify) an in-toto statement binding a **closed** run's verdict to git-immutable facts: the pinned exam's hash, base + head SHAs, run count, and an event hash chain ([docs/ATTESTATION.md](docs/ATTESTATION.md)) |
 | `lute quarantine [list|diff <id>|drop <id>|drop --all]` | inspect or remove stored patches for trusted exam/control edits that Lute quarantined out of run commits |
 | `lute stop` | cleanly stop the active run (and any parallel children) in this repo |
 | `lute land [branch]` | merge `lute/<root>` into the start branch **only if the root exam still passes against the merged tree**; conflict or a failed re-check aborts clean and escalates (`--file F`; opt-in — the default is review-then-merge-yourself) |
@@ -296,12 +330,33 @@ pure projection of events (no rechecks). Its shape is stable:
 Match on `outcome` (and per-node `word`), not the per-node `mark` glyph; `mark` is presentational
 and may change. `exit` is `null` while `outcome` is `running`, then the integer code once it halts.
 
-**The agent contract:** any CLI is a valid engine if: it reads the prompt on **stdin**, makes its
+### The agent contract
+
+Any CLI is a valid engine if: it reads the prompt on **stdin**, makes its
 edits **in the working directory**, and exits. The runner stages tracked changes plus new files
 created during that run; it leaves pre-existing untracked clutter and `INBOX/` cards alone. The
 agent's **exit code is logged but never trusted**; the *only* verdict is the runner re-running
 `done_when`. That is why lute can't lie about doneness, and why your wrapper need not produce a
 meaningful exit code.
+
+**The two engine gotchas.** Most agent CLIs are interactive by default, and a
+non-interactive one still enforces its own permissions: without edit rights it
+exits happily having changed nothing. Lute names such runs — `no edits` on the
+console line, `"edits": false` in the event stream, and after two in a row the
+escalation card asks whether the agent command is non-interactive and allowed
+to edit files. Known-good spellings:
+
+```sh
+codex exec --sandbox workspace-write        # reads stdin, edits the workspace
+claude -p --permission-mode acceptEdits     # non-interactive, file edits allowed
+```
+
+Give the engine the rights its task needs: a dependency upgrade must run the
+package manager, so an edits-only mode is not enough there
+(`claude -p --dangerously-skip-permissions` is full power and belongs inside
+`cage: docker`; `codex exec` gains network inside its sandbox only with
+`-c sandbox_workspace_write.network_access=true`). Lute pipes the prompt and
+reads the tree; it cannot grant your agent permissions.
 
 A circular exam can still pass by echoing the task string back into a file, so it
 measures obedience rather than behavior. Prefer tests, builds, protected fixtures, or ground
@@ -332,7 +387,9 @@ Upgrade React, the lute way: write the exams, then let the loop grind:
 ```yaml
 # lute.yaml
 loop: react-19
-agent: claude -p
+# An upgrade must run npm, so the engine needs command rights, not just edit
+# rights - full power belongs inside cage: docker (see the engine gotchas).
+agent: claude -p --dangerously-skip-permissions
 budget: 48h
 done_when: "npm test && npm run build"
 loops:
@@ -341,7 +398,8 @@ loops:
     done_when: "node -e 'process.exit(require(\"react/package.json\").version.startsWith(\"19\")?0:1)'"
     budget: 3 runs
   - loop: fix-build
-    task: Fix every build error from the upgrade. No downgrades, no ts-ignore.
+    task: Fix every build error from the upgrade. No downgrades, and no
+      @ts-ignore/@ts-expect-error/@ts-nocheck to silence errors.
     done_when: "npm run build"
     budget: 15 runs
   - loop: fix-tests

@@ -7,6 +7,7 @@ include lute.yaml
 include test.sh
 include scripts/install.sh
 include scripts/uninstall.sh
+include scripts/check-links.sh
 recursive-include luteloops *.md
 recursive-include contrib *
 recursive-include tests *.py

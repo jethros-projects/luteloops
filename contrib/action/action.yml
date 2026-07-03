@@ -1,0 +1,57 @@
+# lute-verify — run a lute manifest until its exams pass, inside a CI job.
+#
+# The whole brain is verify.sh (kept separate so the suite can administer it
+# hermetically, t50); this file only wires inputs and uploads the evidence.
+# The job's verdict is lute's exit contract: 0 closed, 3 blocked, 4 gated —
+# blocked and gated fail the job on purpose, with the cards printed.
+name: lute-verify
+description: >-
+  Run a lute manifest until its exams pass. The runner re-administers every
+  exam itself, quarantines agent edits to protected exam materials, and
+  uploads the run's evidence (logs, events, ledger, cards) as an artifact.
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  manifest:
+    description: Path to the lute manifest to run.
+    default: lute.yaml
+  agent:
+    description: >-
+      Agent CLI override (a non-interactive spelling with the rights the task
+      needs; see the README's engine gotchas). Empty uses the manifest's own
+      agent: lines or .lute/config.yaml.
+    default: ""
+  install:
+    description: >-
+      pip requirement spec that provides the lute CLI, or "none" when a prior
+      step already put lute on PATH.
+    default: "git+https://github.com/jethros-projects/luteloops.git@v0.2.0"
+
+outputs:
+  outcome:
+    description: closed | blocked | gated | error — the run's canonical verdict.
+    value: ${{ steps.verify.outputs.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - id: verify
+      shell: bash
+      env:
+        INPUT_MANIFEST: ${{ inputs.manifest }}
+        INPUT_AGENT: ${{ inputs.agent }}
+        INPUT_INSTALL: ${{ inputs.install }}
+      run: bash "$GITHUB_ACTION_PATH/verify.sh"
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: lute-evidence
+        if-no-files-found: ignore
+        path: |
+          .lute/logs/
+          .lute/events.jsonl
+          .lute/ledger.jsonl
+          INBOX/
+          lute-attestation.json

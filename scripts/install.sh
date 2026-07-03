@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_url="${LUTE_REPO_URL:-https://github.com/jethros-projects/luteloops.git}"
-ref="${LUTE_REF:-v0.1.0}"
+ref="${LUTE_REF:-v0.2.0}"
 install_spec="git+${repo_url}@${ref}"
 verbose="${LUTE_INSTALL_VERBOSE:-0}"
 

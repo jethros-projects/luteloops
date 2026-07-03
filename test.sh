@@ -2196,7 +2196,11 @@ t_t29() { # cold-start ergonomics: help/version, missing-file routing, clean-lin
   [ "$rc" -eq 0 ] || die "29a) --help exited $rc, want 0"
   grep -q 'while-loop for agents' h.out || die "29a) --help printed no usage: $(cat h.out)"
   rc=0; "$LUTE" --version > v.out 2>&1 || rc=$?
-  { [ "$rc" -eq 0 ] && grep -q 'lute 0.1.0' v.out; } || die "29a) --version: rc=$rc out=$(cat v.out)"
+  # One version, one source: --version must agree with the package attribute
+  # that pyproject.toml also reads, so the number cannot fork across surfaces.
+  v="$(cd "$ROOT" && python3 -c 'import lute_core; print(lute_core.__version__)')" \
+    || die "29a) lute_core.__version__ is missing (the single version source)"
+  { [ "$rc" -eq 0 ] && grep -qx "lute $v" v.out; } || die "29a) --version: rc=$rc out=$(cat v.out), want lute $v"
   rc=0; "$LUTE" run --help > rh.out 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || die "29a) 'run --help' exited $rc (should intercept, not die unknown-flag): $(cat rh.out)"
   rc=0; "$LUTE" plan --help > ph.out 2>&1 || rc=$?
@@ -2552,6 +2556,36 @@ EOF
       sleep 0.1
     done
   done
+
+  # --- k) stop identity survives a cron-shaped PATH. Cron ticks run with a
+  #        minimal environment; on a host whose cwd probe needs lsof (macOS,
+  #        /usr/sbin), stop must still positively identify the runner instead
+  #        of degrading to "could not confirm". Only python3 + git ride along.
+  mkrepo "$WORK/t32k"
+  bin="$WORK/t32k-bin"; mkdir -p "$bin"
+  # A wrapper, not a symlink: a venv python3 found via symlink loses its
+  # pyvenv.cfg (and with it PyYAML); exec-ing the real path keeps the venv.
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v python3)" > "$bin/python3"; chmod +x "$bin/python3"
+  ln -sf "$(command -v git)" "$bin/git"
+  cat > lute.yaml <<EOF
+loop: cron-stop
+agent: "$FAKE"
+task: t
+done_when: "false"
+budget: 50 runs
+EOF
+  cat > playbook.json <<'EOF'
+{ "cron-stop": { "1": [ {"trap_sleep": {"seconds": 30, "pid": "agent.pid"}} ] } }
+EOF
+  seal
+  PATH="$bin:/usr/bin:/bin" "$LUTE" run --bg > bg.out 2>&1
+  pid=$(grep -o 'pid [0-9][0-9]*' bg.out | grep -o '[0-9][0-9]*')
+  [ -n "$pid" ] || die "32k) no bg pid: $(cat bg.out)"
+  i=0; while [ ! -f agent.pid ]; do i=$((i+1)); [ "$i" -gt 100 ] && die "32k) agent never started under minimal PATH"; sleep 0.1; done
+  rc=0; PATH="$bin:/usr/bin:/bin" "$LUTE" stop > stop.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "32k) stop under minimal PATH exited $rc: $(cat stop.out)"
+  grep -q "stopped run pid $pid" stop.out || die "32k) stop didn't identify the runner under minimal PATH: $(cat stop.out)"
+  i=0; while kill -0 "$pid" 2>/dev/null; do i=$((i+1)); [ "$i" -gt 60 ] && die "32k) run still alive after stop"; sleep 0.1; done
 }
 
 # ---------------------------------------------------------------- T33
@@ -2782,6 +2816,74 @@ t_t36() { # path-to-frontier polish: lint won't wave run on without an agent; on
   [ "$rc" -eq 0 ] || die "36a) lint on a partial (no-agent) file should still pass: $(cat l.out)"
   grep -q 'set an agent first' l.out || die "36a) lint waved run on without naming the missing agent: $(cat l.out)"
   grep -qi 'circular exam' l.out || die "36a) lint epilogue lacks the circular-exam caveat: $(cat l.out)"
+
+  # --- a2) the machine gate stays honest: --no-exec catches a missing tool by
+  #         resolvability (nothing executed), omits the human epilogue, and the
+  #         environmental answer-key advisory rides the note channel, so every
+  #         remaining warning is actionable
+  mkrepo "$WORK/t36a2"
+  printf 'loop: ghost\nagent: "true"\ntask: t\ndone_when: "definitely-not-a-real-tool-xyz --check"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || die "36a2) --no-exec waved through a missing tool: rc=$rc $(cat l.out)"
+  grep -q 'not administrable' l.out || die "36a2) missing tool not named: $(cat l.out)"
+  if grep -qi 'circular exam' l.out; then die "36a2) machine-gate output still carries the human epilogue"; fi
+  printf 'loop: ghost2\nagent: "true"\ntask: t\ndone_when: "true && definitely-not-a-real-tool-xyz"\nbudget: 2 runs\n' > lute.yaml
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || die "36a2) missing tool hidden behind && passed the gate: $(cat l.out)"
+  printf 'loop: quiet\nagent: "true"\ntask: t\ndone_when: "test -x lute.yaml || true"\nbudget: 2 runs\n' > lute.yaml
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "36a2) clean manifest failed the gate: $(cat l.out)"
+  if grep -q 'warn:.*answer-auth key' l.out; then die "36a2) environmental advisory still on the warning channel"; fi
+  grep -q 'note:.*answer-auth key' l.out || die "36a2) answer-key advisory vanished entirely: $(cat l.out)"
+
+  # --- a3) two run-breaking authoring traps are named before any run:
+  #         an UNTRACKED protected path (protection restores committed
+  #         originals, so the first check quarantine-deletes it), and a child
+  #         re-taking a task-bearing parent's exact exam (pure ceremony - the
+  #         parent already administers and repairs it). The task-less-parent
+  #         repair pattern stays silent: that one is the house style.
+  mkrepo "$WORK/t36a3"
+  printf 'loop: up\nagent: "true"\ntask: t\ndone_when: "sh checks/x.sh"\nprotected: ["checks/**"]\nbudget: 2 runs\n' > lute.yaml
+  seal
+  mkdir -p checks && printf 'exit 0\n' > checks/x.sh
+  rc=0; "$LUTE" lint --no-exec > l.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "36a3) untracked protected path must warn, not fail: $(cat l.out)"
+  grep -q 'untracked' l.out || die "36a3) untracked protected path not named: $(cat l.out)"
+  git add checks/x.sh && git commit -qm "land the exam material"
+  "$LUTE" lint --no-exec > l.out 2>&1 || die "36a3) lint failed after committing: $(cat l.out)"
+  if grep -q 'untracked' l.out; then die "36a3) committed exam material still flagged untracked"; fi
+  cat > lute.yaml <<'EOF'
+loop: parent-with-task
+agent: "true"
+task: parent does work
+done_when: "sh checks/x.sh"
+protected: ["checks/**"]
+budget: 4 runs
+loops:
+  - loop: kid
+    task: child re-takes the same exam
+    done_when: "sh checks/x.sh"
+    budget: 2 runs
+EOF
+  git add lute.yaml && git commit -qm "duplicate exam fixture"
+  "$LUTE" lint --no-exec > l.out 2>&1 || die "36a3) duplicate exam must warn, not fail: $(cat l.out)"
+  grep -q "equals its parent's" l.out || die "36a3) ceremonial duplicate exam not named: $(cat l.out)"
+  cat > lute.yaml <<'EOF'
+loop: taskless-root
+done_when: "sh checks/x.sh"
+protected: ["checks/**"]
+budget: 4 runs
+loops:
+  - loop: repair
+    agent: "true"
+    task: make the root exam pass
+    done_when: "sh checks/x.sh"
+    budget: 2 runs
+EOF
+  git add lute.yaml && git commit -qm "repair pattern fixture"
+  "$LUTE" lint --no-exec > l.out 2>&1 || die "36a3) repair pattern must lint clean: $(cat l.out)"
+  if grep -q "equals its parent's" l.out; then die "36a3) the task-less-parent repair pattern was flagged as ceremony"; fi
 
   # --- b) once's success line offers git merge, NOT lute land (a fileless run can't be re-verified)
   mkrepo "$WORK/t36b"
@@ -3824,7 +3926,10 @@ EOF
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
   [ ! -f "$WORK/filter-proof" ] || die "47e) host git add executed an agent-controlled clean filter"
 
-  # --- f) protected quarantine does not copy through a symlinked ancestor.
+  # --- f) protected quarantine does not copy through a symlinked ancestor,
+  #        and stores NO live symlink at all (a stored out-of-repo symlink is
+  #        host content any dereferencing tool - GNU grep -R, tar, backup -
+  #        would read; the `find -type l` check is grep-flavor-independent).
   mkrepo "$WORK/t47-quarantine"
   mkdir -p secret "$WORK/outside-secret"
   printf 'baseline\n' > secret/fixture.txt
@@ -3846,8 +3951,36 @@ EOF
   chmod +x agent.sh
   seal
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
-  ! grep -R HOST-CANARY-016 .lute/quarantine >/dev/null 2>&1 || die "47f) quarantine copied a host file through a symlinked ancestor"
+  [ -z "$(find .lute/quarantine -type l 2>/dev/null)" ] || die "47f) quarantine stored a live symlink (dereferenceable to host content)"
+  ! grep -R HOST-CANARY-016 .lute/quarantine >/dev/null 2>&1 || die "47f) quarantine exposed a host file through a symlinked ancestor"
   grep -q HOST-CANARY-016 "$WORK/outside-secret/fixture.txt" || die "47f) outside canary was modified"
+
+  # --- g) same leak, direct form: a protected path the agent replaces with a
+  #        symlink straight to a host secret. Quarantine records the attempt as
+  #        inert text, never a live pointer to the target.
+  mkrepo "$WORK/t47-quarantine-direct"
+  printf 'baseline\n' > fixture.txt
+  printf 'HOST-CANARY-017\n' > "$WORK/host-secret-017"
+  cat > lute.yaml <<EOF
+loop: q
+agent: "sh ./agent.sh"
+task: point the exam at a host secret
+done_when: "false"
+protected:
+  - fixture.txt
+budget: 1 run
+EOF
+  cat > agent.sh <<EOF
+#!/bin/sh
+rm -f fixture.txt
+ln -s "$WORK/host-secret-017" fixture.txt
+EOF
+  chmod +x agent.sh
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ -z "$(find .lute/quarantine -type l 2>/dev/null)" ] || die "47g) quarantine stored a live symlink to a host secret"
+  ! grep -R HOST-CANARY-017 .lute/quarantine >/dev/null 2>&1 || die "47g) quarantine exposed a host secret through a direct symlink"
+  grep -q HOST-CANARY-017 "$WORK/host-secret-017" || die "47g) host secret was modified"
 
   # --- g) answer paths are loop ids, not filesystem paths.
   mkrepo "$WORK/t47-answer-path"
@@ -4126,8 +4259,390 @@ EOF
   fi
 }
 
+# ---------------------------------------------------------------- T49
+t_t49() { # no-edit runs are loud: an agent that changes nothing is named in the
+          # event stream, on the console line, and (after 2 in a row) on the card -
+          # the misconfigured-engine failure mode (interactive CLI, missing
+          # permission flags) must never burn a budget silently
+  # --- a) an idle agent: every run records edits: false; console says "no edits";
+  #        the escalation card asks the one question that matters
+  mkrepo "$WORK/t49a"
+  cat > lute.yaml <<'EOF'
+loop: idle-agent
+agent: "true"
+task: Fix something (this engine reads nothing and edits nothing).
+done_when: "test -f out.txt"
+budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "49a) run exited $rc, want 3 (blocked): $(cat run.out)"
+  [ "$(grep -c '"edits": false' .lute/events.jsonl)" -eq 2 ] \
+    || die "49a) agent_end events do not record both no-edit runs"
+  grep -q 'no edits' run.out || die "49a) console line does not say no edits"
+  grep -q 'no edits' INBOX/idle-agent.md \
+    || die "49a) card does not name the no-edit runs (silent burn)"
+  grep -qi 'non-interactive' INBOX/idle-agent.md \
+    || die "49a) card does not ask whether the agent command is non-interactive"
+
+  # --- b) an agent that edits: no false positive, in events or on the console
+  mkrepo "$WORK/t49b"
+  cat > lute.yaml <<'EOF'
+loop: busy-agent
+agent: "touch out.txt"
+task: t
+done_when: "test -f out.txt"
+budget: 2 runs
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "49b) run exited $rc, want 0: $(cat run.out)"
+  if grep -q '"edits": false' .lute/events.jsonl; then
+    die "49b) a run that edited the tree was flagged as no-edit"
+  fi
+  if grep -q 'no edits' run.out; then
+    die "49b) console flags no-edit on a run that edited"
+  fi
+}
+
+# ---------------------------------------------------------------- T50
+t_t50() { # action-contract: contrib/action maps lute's exit contract onto a CI
+          # job - verify.sh is the whole brain, administrable without GitHub
+  # --- a) the action's shape: composite, inputs wired to the script, evidence uploaded
+  python3 - "$ROOT/contrib/action/action.yml" <<'PY' || die "50a) action.yml shape broke"
+import sys, yaml
+a = yaml.safe_load(open(sys.argv[1]))
+assert a["runs"]["using"] == "composite", "not a composite action"
+assert set(a["inputs"]) == {"manifest", "agent", "install"}, sorted(a["inputs"])
+steps = a["runs"]["steps"]
+assert any("verify.sh" in (s.get("run") or "") for s in steps), "verify.sh not invoked"
+assert any("upload-artifact" in (s.get("uses") or "") and s.get("if") == "always()" for s in steps), \
+    "evidence upload missing or not always()"
+PY
+  [ -x "$ROOT/contrib/action/verify.sh" ] || die "50a) verify.sh is not executable"
+
+  bin="$WORK/t50-bin"; mkdir -p "$bin"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$LUTE" > "$bin/lute"; chmod +x "$bin/lute"
+
+  # --- b) a green manifest: exit 0, the closing message, outcome=closed
+  mkrepo "$WORK/t50b"
+  printf 'loop: green\nagent: "touch out.txt"\ntask: t\ndone_when: "test -f out.txt"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; PATH="$bin:$PATH" INPUT_INSTALL=none GITHUB_OUTPUT="$PWD/gh.out" \
+    bash "$ROOT/contrib/action/verify.sh" > o.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50b) green manifest exited $rc: $(cat o.out)"
+  grep -q 'all loops closed' o.out || die "50b) no closing message: $(cat o.out)"
+  grep -qx 'outcome=closed' gh.out || die "50b) GITHUB_OUTPUT lacks outcome=closed: $(cat gh.out)"
+  [ -f lute-attestation.json ] || die "50b) closed run left no attestation artifact"
+  PATH="$bin:$PATH" lute attest --verify lute-attestation.json > v.out 2>&1 \
+    || die "50b) the action's attestation does not verify: $(cat v.out)"
+
+  # --- c) a blocked manifest: exit 3, the cards printed, outcome=blocked
+  mkrepo "$WORK/t50c"
+  printf 'loop: stuck\nagent: "true"\ntask: t\ndone_when: "false"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  rc=0; PATH="$bin:$PATH" INPUT_INSTALL=none GITHUB_OUTPUT="$PWD/gh.out" \
+    bash "$ROOT/contrib/action/verify.sh" > o.out 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "50c) blocked manifest exited $rc, want 3: $(cat o.out)"
+  grep -q 'lute answer' o.out || die "50c) blocked run did not print the cards: $(cat o.out)"
+  grep -qx 'outcome=blocked' gh.out || die "50c) GITHUB_OUTPUT lacks outcome=blocked: $(cat gh.out)"
+
+  # --- d) the agent input threads through to lint and run
+  mkrepo "$WORK/t50d"
+  printf 'loop: threaded\ntask: t\ndone_when: "test -f out.txt"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; PATH="$bin:$PATH" INPUT_INSTALL=none INPUT_AGENT="touch out.txt" GITHUB_OUTPUT="$PWD/gh.out" \
+    bash "$ROOT/contrib/action/verify.sh" > o.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50d) agent input did not thread through: $(cat o.out)"
+  grep -qx 'outcome=closed' gh.out || die "50d) GITHUB_OUTPUT lacks outcome=closed: $(cat gh.out)"
+
+  # --- e) the recipe shape closes hermetically: repair-after-a-bump as the
+  #        recipes structure it (build loop, then protected suite with
+  #        confirm: 2), pure python standing in for npm/pip
+  mkrepo "$WORK/t50e"
+  mkdir -p tests
+  printf 'def add(a, b)\n    return a + b\n' > lib.py     # syntax error = broken build
+  printf 'import sys, lib\nsys.exit(0 if lib.add(2, 3) == 5 else 1)\n' > tests/test_lib.py
+  cat > lute.yaml <<EOF
+loop: bump-repair
+agent: "$FAKE"
+budget: 10 runs
+done_when: "PYTHONPATH=. python3 -B tests/test_lib.py"
+protected: ["tests/**"]
+loops:
+  - loop: fix-build
+    task: Make lib importable again.
+    done_when: "python3 -B -c 'import lib'"
+    budget: 3 runs
+  - loop: fix-tests
+    task: Make the suite pass. Do not touch the tests.
+    done_when: "PYTHONPATH=. python3 -B tests/test_lib.py"
+    confirm: 2
+    budget: 3 runs
+EOF
+  cat > playbook.json <<'EOF'
+{ "fix-build": { "1": [ {"write": {"path": "lib.py", "content": "def add(a, b):\n    return a - b  # imports, still wrong\n"}},
+                        {"journal": "run 1: fixed the syntax error."} ] },
+  "fix-tests": { "1": [ {"write": {"path": "lib.py", "content": "def add(a, b):\n    return a + b\n"}},
+                        {"journal": "run 1: fixed the math."} ] } }
+EOF
+  seal
+  rc=0; "$LUTE" lint > lint.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50e) recipe-shaped manifest failed lint: $(cat lint.out)"
+  grep -q '3 check(s)' lint.out || die "50e) lint did not administer all three exams: $(cat lint.out)"
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "50e) recipe shape did not close: $(cat run.out)"
+  grep -q '"streak": "2/2"' .lute/events.jsonl || die "50e) confirm: 2 never reached its streak"
+
+  # --- f) every shipped recipe stays schema-valid, exercised the documented
+  #        way: copied into a repo as lute.yaml, then linted (checks skipped)
+  for recipe in "$ROOT"/contrib/recipes/*.yaml; do
+    mkrepo "$WORK/t50f-$(basename "$recipe" .yaml)"
+    cp "$recipe" lute.yaml
+    seal
+    rc=0; "$LUTE" lint --no-exec > lint.out 2>&1 || rc=$?
+    [ "$rc" -eq 0 ] || die "50f) shipped recipe $(basename "$recipe") fails lint: $(cat lint.out)"
+  done
+}
+
+# ---------------------------------------------------------------- T51
+t_t51() { # attestation: a closed run binds its verdict to git-immutable
+          # coordinates - the pinned exam's hash, the base and head SHAs, the
+          # run-commit count, and a hash chain over the events - and refuses
+          # to attest anything it cannot re-derive
+  # --- a) a closed run attests; every attested fact re-derives from the repo
+  mkrepo "$WORK/t51a"
+  printf 'loop: att\nagent: "touch out.txt"\ntask: t\ndone_when: "test -f out.txt"\nbudget: 2 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > run.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "51a) run exited $rc: $(cat run.out)"
+  rc=0; "$LUTE" attest > att.json 2> att.err || rc=$?
+  [ "$rc" -eq 0 ] || die "51a) attest exited $rc: $(cat att.err)"
+  head_sha="$(git rev-parse lute/att)"
+  base_sha="$(git log --first-parent --format='%H %s' lute/att | awk '$2 !~ /^lute\(/{print $1; exit}')"
+  exam_hash="$(git show "$base_sha:lute.yaml" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+  HEAD_SHA="$head_sha" BASE_SHA="$base_sha" EXAM_HASH="$exam_hash" python3 - att.json <<'PY' || die "51a) statement facts do not re-derive from the repo"
+import json, os, sys
+s = json.load(open(sys.argv[1]))
+assert s["_type"] == "https://in-toto.io/Statement/v1", s["_type"]
+assert s["subject"][0]["digest"]["gitCommit"] == os.environ["HEAD_SHA"]
+p = s["predicate"]
+assert p["outcome"] == "closed", p["outcome"]
+assert p["trusted_base"] == os.environ["BASE_SHA"]
+assert p["exam_sha256"] == os.environ["EXAM_HASH"]
+assert p["runs"] == 1, p["runs"]
+assert p["events"]["lines"] > 0 and len(p["events"]["chain_sha256"]) == 64
+PY
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -eq 0 ] && grep -q 'verified' v.out; } || die "51a) verify failed: rc=$rc $(cat v.out)"
+
+  # --- b) every tamper is refused with its own reason
+  cp .lute/events.jsonl events.orig
+  sed '1s/run_start/run_START/' events.orig > .lute/events.jsonl
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'events' v.out; } || die "51b) edited events not refused: rc=$rc $(cat v.out)"
+  head -2 events.orig > .lute/events.jsonl
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'shorter' v.out; } || die "51b) truncated events not refused: rc=$rc $(cat v.out)"
+  cp events.orig .lute/events.jsonl
+  python3 - att.json <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+s["predicate"]["exam_sha256"] = "0" * 64
+json.dump(s, open(sys.argv[1], "w"))
+PY
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'exam' v.out; } || die "51b) doctored exam hash not refused: rc=$rc $(cat v.out)"
+  "$LUTE" attest > att.json 2>/dev/null || die "51b) re-attest failed"
+  mkrepo "$WORK/t51b-alien"
+  printf 'loop: att\nagent: "true"\ntask: t\ndone_when: "true"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  cp "$WORK/t51a/att.json" .
+  rc=0; "$LUTE" attest --verify att.json > v.out 2>&1 || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'not in this repository' v.out; } || die "51b) alien repo not refused: rc=$rc $(cat v.out)"
+
+  # --- c) only a closed manifest run attests: blocked and fileless refuse
+  mkrepo "$WORK/t51c"
+  printf 'loop: stuck\nagent: "true"\ntask: t\ndone_when: "false"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || die "51c) fixture should block, got $rc"
+  rc=0; "$LUTE" attest > /dev/null 2> a.err || rc=$?
+  { [ "$rc" -ne 0 ] && grep -qi 'closed' a.err; } || die "51c) blocked run attested: rc=$rc $(cat a.err)"
+  mkrepo "$WORK/t51c-fileless"
+  printf 'x\n' > seed.txt
+  seal
+  "$LUTE" once --until "test -f out.txt" --agent "touch out.txt" -- "t" > /dev/null 2>&1 || die "51c) once failed"
+  rc=0; "$LUTE" attest > /dev/null 2> a.err || rc=$?
+  [ "$rc" -ne 0 ] || die "51c) a fileless run attested (no committed exam to bind)"
+}
+
+# ---------------------------------------------------------------- T52
+t_t52() { # worker prompt: the failing-check output is presented as a byte-budgeted
+          # head+tail excerpt (a top-anchored diagnostic survives, not just the
+          # tail), a silent check gets an honest exit-only sentinel instead of a
+          # dangling "last N lines" claim, and output rides inside a <check_output> tag
+  # --- a) a long output (over the byte budget): line 1 diagnostic AND the trailing
+  #        summary both reach the prompt; the middle is elided with a marker; all
+  #        wrapped in the tag; and the t8 substring + fake-agent journal path survive.
+  mkrepo "$WORK/t52a"
+  mkdir -p checks
+  cat > checks/verify.sh <<'SH'
+#!/bin/sh
+echo "HEAD-DIAGNOSTIC-MARKER: the real fix is here on line 1"
+i=1; while [ "$i" -le 400 ]; do echo "  ... noise line $i padded xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i+1)); done
+echo "TAIL-SUMMARY-MARKER: 1 error total"
+exit 1
+SH
+  chmod +x checks/verify.sh
+  cat > lute.yaml <<EOF
+loop: excerpt
+agent: "$FAKE"
+task: fix it
+done_when: "./checks/verify.sh"
+protected: ["checks/**"]
+budget: 1 runs
+EOF
+  echo '{}' > playbook.json
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  P=prompts/excerpt.run1.txt
+  [ -f "$P" ] || die "52a) no prompt captured: $(cat out.log)"
+  grep -qF 'HEAD-DIAGNOSTIC-MARKER' "$P" || die "52a) head diagnostic evicted (tail-only presentation): $(cat "$P")"
+  grep -qF 'TAIL-SUMMARY-MARKER' "$P" || die "52a) trailing summary missing from the excerpt"
+  grep -qF 'lines elided' "$P" || die "52a) elided middle not marked"
+  { grep -qF '<check_output>' "$P" && grep -qF '</check_output>' "$P"; } || die "52a) check output not wrapped in a tag"
+  grep -qF 'The check `./checks/verify.sh` is failing' "$P" || die "52a) the t8 'is failing' substring broke"
+  grep -qF '.lute/journal/excerpt.md' "$P" || die "52a) journal path broke (fake_agent extracts the loop id from it)"
+
+  # --- b) a silent (boolean) check prints nothing: the prompt names the exit-only
+  #        signal, and never claims N lines of output that never existed.
+  mkrepo "$WORK/t52b"
+  cat > lute.yaml <<EOF
+loop: silent
+agent: "$FAKE"
+task: make it exist
+done_when: "test -f out.txt"
+budget: 1 runs
+EOF
+  echo '{}' > playbook.json
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  P=prompts/silent.run1.txt
+  [ -f "$P" ] || die "52b) no prompt captured: $(cat out.log)"
+  grep -qiF 'printed nothing' "$P" || die "52b) silent check got no exit-only sentinel: $(cat "$P")"
+  if grep -qF 'Last 50 lines' "$P"; then die "52b) dangling 'Last 50 lines' claim over empty output"; fi
+}
+
+# ---------------------------------------------------------------- T53
+t_t53() { # read-only render: watch --snapshot and status draw the loop hierarchy
+          # as a connected tree; colour is a terminal-only luxury (OFF when the
+          # output is captured, so logs and machine surfaces stay plain); the
+          # ASCII fallback degrades the box-drawing instead of crashing
+  mkrepo "$WORK/t53"
+  cat > lute.yaml <<EOF
+loop: root-loop
+agent: "$FAKE"
+task: Finish the root.
+done_when: "test -f root_done"
+budget: 3 runs
+loops:
+  - loop: child-a
+    task: Finish child a.
+    done_when: "test -f a_done"
+    budget: 3 runs
+  - loop: child-b
+    task: Finish child b.
+    done_when: "test -f b_done"
+    budget: 3 runs
+EOF
+  cat > playbook.json <<'EOF'
+{ "child-a": { "1": [ {"write": {"path": "a_done", "content": "ok\n"}} ] },
+  "child-b": { "1": [ {"write": {"path": "b_done", "content": "ok\n"}} ] },
+  "root-loop": { "1": [ {"write": {"path": "root_done", "content": "ok\n"}} ] } }
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "53) run exited $rc"
+
+  # --- a) the snapshot is a tree: nested children hang off connectors, the last
+  #        child on └─; captured output carries NO ANSI colour (an ESC byte would
+  #        corrupt logs and break every grep-based notch)
+  "$LUTE" watch --snapshot > snap.out 2>&1 || die "53a) snapshot failed: $(cat snap.out)"
+  grep -q '├─ ' snap.out || die "53a) no branch connector for the non-last child: $(cat snap.out)"
+  grep -q '└─ ' snap.out || die "53a) no end connector for the last child: $(cat snap.out)"
+  if grep -q "$(printf '\033')" snap.out; then die "53a) captured snapshot leaked an ANSI escape (colour must be TTY-only)"; fi
+  grep -Eq '✔ child-a.*1 run' snap.out || die "53a) child row lost its glyph/run count (t12 shape): $(cat snap.out)"
+
+  # --- b) status draws the same tree, keeps the ASCII [word], and stays colourless
+  #        when captured; the green root still points at land/merge
+  "$LUTE" status > st.out 2>&1 || die "53b) status failed: $(cat st.out)"
+  grep -q '└─ ' st.out || die "53b) status is not a tree: $(cat st.out)"
+  grep -q '\[done\]' st.out || die "53b) status lost the ASCII state word: $(cat st.out)"
+  if grep -q "$(printf '\033')" st.out; then die "53b) captured status leaked an ANSI escape"; fi
+  grep -q 'git merge lute/root-loop' st.out || die "53b) green root lost the land/merge pointer: $(cat st.out)"
+
+  # --- c) under a non-UTF (ascii) stdout the box-drawing degrades, never crashes
+  rc=0; LC_ALL=C PYTHONUTF8=0 PYTHONIOENCODING=ascii "$LUTE" watch --snapshot > a.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "53c) snapshot crashed under ascii stdout (exit $rc): $(cat a.out)"
+  if grep -q '─' a.out; then die "53c) box-drawing not downgraded under ascii: $(cat a.out)"; fi
+}
+
+# ---------------------------------------------------------------- T54
+t_t54() { # mcp: `lute mcp` is a stdio JSON-RPC server exposing every verb as a
+          # tool; the handshake, tools/list, and a real tools/call all work, and
+          # each tool call shells out to the real CLI in a fresh process
+  mkrepo "$WORK/t54"
+  printf 'loop: mcp-demo\nagent: "true"\ntask: t\ndone_when: "true"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  # one JSON-RPC message per line on stdin; the server replies one JSON per line.
+  {
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t54","version":"1"}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lute_inbox","arguments":{}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"nonsense/method"}'
+  } | "$LUTE" mcp > mcp.out 2>mcp.err || die "54) mcp server exited nonzero: $(cat mcp.err)"
+
+  python3 - mcp.out <<'PY' || die "54) mcp protocol assertions failed"
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+by_id = {m.get("id"): m for m in lines}
+
+# initialize: server info + capabilities + it echoes the protocol version
+init = by_id[1]["result"]
+assert init["serverInfo"]["name"] == "lute", init
+assert "tools" in init["capabilities"], init
+assert init["protocolVersion"] == "2025-11-25", init
+assert "walk-away" in init.get("instructions", ""), "instructions must teach the when-to-hand-off"
+
+# the notification produced NO response line (id is None only for the unknown-method error)
+assert 1 in by_id and 2 in by_id and 3 in by_id and 4 in by_id, sorted(by_id)
+
+# tools/list: EVERY verb is exposed as a tool, with a name + description + inputSchema
+tools = {t["name"] for t in by_id[2]["result"]["tools"]}
+expected = {"lute_once","lute_plan","lute_run","lute_lint","lute_status","lute_watch",
+            "lute_inbox","lute_answer","lute_land","lute_judge","lute_quarantine",
+            "lute_attest","lute_stop","lute_init","lute_cron"}
+missing = expected - tools
+assert not missing, f"tools/list missing verbs: {missing}"
+for t in by_id[2]["result"]["tools"]:
+    assert t["description"] and t["inputSchema"]["type"] == "object", t["name"]
+
+# tools/call lute_inbox ran the REAL cli (fresh process) and returned content
+call = by_id[3]["result"]
+assert call["content"][0]["type"] == "text" and call["content"][0]["text"], call
+assert "exit_code" in call.get("structuredContent", {}), call
+
+# an unknown METHOD is a JSON-RPC error (-32601), not a crash
+assert by_id[4]["error"]["code"] == -32601, by_id[4]
+print("ok")
+PY
+  grep -q 'nothing waiting on you\|inbox' mcp.out || die "54) lute_inbox tool did not return the real CLI output: $(cat mcp.out)"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53 t54"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4178,6 +4693,12 @@ desc() {
     t46) echo "stated-contracts THREAT_MODEL.md states the two trust bases + named out-of-scope boundaries (README-linked); INVARIANT.md states 'the builder cannot author its own verdict' and maps each clause to a real notch (runner-linked)" ;;
     t47) echo "host-boundary  runner state, Git, answer, plan, judge, worktree, manifest, and config hardening" ;;
     t48) echo "ledger-locality run accounting is committed per branch (children own their ledger, merged like work); no flock artifact created or committed" ;;
+    t49) echo "no-edit runs   an agent that changes nothing is named in events, console, and card; a run that edits is never flagged" ;;
+    t50) echo "wedge-kit      contrib/action maps lute's exit contract onto a CI job; the recipe shape closes hermetically; shipped recipes stay schema-valid" ;;
+    t51) echo "attestation    a closed run binds exam hash + base/head SHAs + run count + event chain into a verifiable statement; tampers and un-closed runs are refused, each with its reason" ;;
+    t52) echo "worker-prompt  the failing-check output is a head+tail excerpt (top-anchored diagnostics survive); a silent check gets an exit-only sentinel; output rides in a <check_output> tag" ;;
+    t53) echo "read-render    watch --snapshot and status draw the loop tree with connectors; colour is TTY-only (no ANSI when captured); ascii degrades the box-drawing" ;;
+    t54) echo "mcp-server     lute mcp is a stdio JSON-RPC server exposing every verb as a tool; handshake + tools/list + a real tools/call work; unknown method errors" ;;
   esac
 }
 
