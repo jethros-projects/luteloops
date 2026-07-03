@@ -59,19 +59,28 @@ closes a loop), and cannot fail silently forever (budgets become cards in
 features, and plain CI is spelled out, both directions, in
 [docs/COMPARED.md](docs/COMPARED.md).
 
-## Install: One Paste
+## Install
 
-Paste this in a terminal to install Lute:
+**Recommended — from PyPI with [pipx](https://pipx.pypa.io) (Python 3.10+):**
+
+```sh
+brew install pipx        # or: python3 -m pip install --user pipx   (skip if you already have pipx)
+pipx ensurepath          # first pipx tool on this machine only — puts ~/.local/bin on your PATH
+pipx install luteloops
+lute --version           # → lute 0.2.0
+```
+
+`pipx ensurepath` is a **one-time-per-machine** step, not part of installing
+lute: it makes sure the folder pipx drops commands into is on your `$PATH`, so a
+fresh shell can find `lute`. If you've used pipx before, it's a no-op. **Open a
+new terminal tab after it** so the change takes effect — if `lute` still isn't
+found, that's the fix.
+
+**No pipx?** One paste installs Lute into a private venv and symlinks `lute` onto
+your PATH:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/install.sh | bash
-```
-
-Uninstall just the tool, leaving project repos, `.lute/`, `INBOX/`, branches,
-logs, and crontab entries alone:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/uninstall.sh | bash
 ```
 
 Or ask Codex/Claude Code:
@@ -80,21 +89,15 @@ Or ask Codex/Claude Code:
 Install Lute from https://github.com/jethros-projects/luteloops by running the project installer. Verify with lute --help.
 ```
 
-When the PyPI package is published, Python 3.10+ only:
+**Uninstall** just the tool, leaving project repos, `.lute/`, `INBOX/`, branches,
+logs, and crontab entries alone — `pipx uninstall luteloops`, or for the one-paste install:
 
 ```sh
-pipx install luteloops
-lute --help
+curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/uninstall.sh | bash
 ```
 
-To install the tagged release directly:
-
-```sh
-pipx install git+https://github.com/jethros-projects/luteloops.git@v0.2.0
-```
-
-Or run it straight from a checkout. The executable is a tiny `lute` script, and
-the runtime stays Python standard library + PyYAML:
+**Or run it straight from a checkout.** The executable is a tiny `lute` script,
+and the runtime stays Python standard library + PyYAML:
 
 ```sh
 python3 -m pip install pyyaml      # only needed for checkout-style use
