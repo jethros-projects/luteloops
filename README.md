@@ -158,6 +158,7 @@ copy to inspect or customize.
 - [docs/COMPARED.md](docs/COMPARED.md) — vs a bare loop, ralph-style loops, Aider, vendor goal features, and plain CI; both directions, by mechanism
 - [contrib/recipes/](contrib/recipes/) — verified upgrades ready to adapt: React major, a bot's dependency bump, Django major, Node LTS
 - [docs/UPGRADE-BOT.md](docs/UPGRADE-BOT.md) — drive Renovate/Dependabot PRs with a loop: locally, by cron, or in CI via [contrib/action](contrib/action/)
+- [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) — reach lute from Claude Code and Codex: every verb as an MCP tool (`lute mcp`) plus a skill/AGENTS.md that hands walk-away tasks to lute
 - [docs/ATTESTATION.md](docs/ATTESTATION.md) — the verdict as a verifiable, signable artifact
 - [THREAT_MODEL.md](THREAT_MODEL.md) — what holds uncaged, what needs the cage, what is out of scope
 - [INVARIANT.md](INVARIANT.md) — the one claim everything defends, mapped to the notches that enforce it

@@ -11,4 +11,5 @@ piece is a worked example you can copy, adapt, or delete.
 | [`action/`](action/) | the `lute-verify` composite GitHub Action: run a manifest in CI, map lute's exit contract onto the job, upload logs + events + attestation |
 | [`cage/`](cage/) | a worked agent-cage Dockerfile and its README (the cage contract lives in the main README and [THREAT_MODEL.md](../THREAT_MODEL.md)) |
 | [`lute.sh`](lute.sh) | the thirty-line bash kernel — passes the suite's first two notches, and is the honest answer to "isn't this just a bash loop?" ([docs/COMPARED.md](../docs/COMPARED.md)) |
+| [`integrations/`](integrations/) | reach lute from Claude Code and Codex — the MCP skill + Codex AGENTS.md (registration in [docs/INTEGRATIONS.md](../docs/INTEGRATIONS.md)) |
 | [`loop-architecture-visualization.svg`](loop-architecture-visualization.svg) | one picture of the loop: check → work → verify → commit → repeat → escalate |

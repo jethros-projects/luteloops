@@ -65,6 +65,7 @@ usage:
   lute quarantine [list]       inspect quarantined trusted-exam edits
   lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
+  lute mcp                     serve every verb as MCP tools over stdio (for Claude Code, Codex, any MCP client)
 a check may exit 75 = "not yet": no agent wakes, no run budget spent; the loop
 re-asks every check_every (default 60s) while any time budget keeps ticking;
 an uncapped not-yet blocks immediately instead of hanging
@@ -628,6 +629,13 @@ def cmd_attest(args: list[str]) -> int:
     return 0
 
 
+def cmd_mcp(args: list[str]) -> int:
+    pos, _ = parse(args, set())
+    need_pos(pos, "usage: lute mcp   (a stdio MCP server; register it with your agent, don't run it by hand)", 0, 0)
+    from . import mcp
+    return mcp.serve()
+
+
 def cmd_cron(args: list[str]) -> int:
     if args not in (["sync"], ["remove"]):
         raise UsageError("usage: lute cron sync|remove")
@@ -669,6 +677,7 @@ def main(argv=None) -> int:
         "judge": cmd_judge,
         "attest": cmd_attest,
         "quarantine": cmd_quarantine,
+        "mcp": cmd_mcp,
     }
     if argv and argv[0] not in commands:
         near = difflib.get_close_matches(argv[0], commands, 1)
