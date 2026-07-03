@@ -15,6 +15,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 
+from . import render
 from .domain import LoopSpec
 from .errors import InternalError, UsageError
 from .runner import self_cmd
@@ -73,6 +74,6 @@ def sync_or_remove(action: str, repo: str, root: LoopSpec | None, schedules: lis
     if writer.returncode:
         raise InternalError("crontab update failed")
     print(
-        f"crontab: {max(len(block) - 2, 0)} lute schedule(s) for {repo}"
-        if action == "sync" else f"crontab: removed the lute block for {repo}"
+        f"{render.bold('crontab:')} {max(len(block) - 2, 0)} lute schedule(s) for {repo}"
+        if action == "sync" else f"{render.bold('crontab:')} removed the lute block for {repo}"
     )
