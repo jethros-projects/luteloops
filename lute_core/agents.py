@@ -76,23 +76,34 @@ class AgentRunner:
             raise UsageError(str(exc)) from exc
 
     def build_prompt(self, loop: LoopSpec, agent_command: str, tail_text: str, answer: str | None) -> str:
+        # A silent (boolean) check prints nothing on failure; name the exit-only
+        # signal rather than render an empty box under a "here is the output" label.
+        body = tail_text if tail_text.strip() else (
+            "(the check exited non-zero and printed nothing — it signals only via its "
+            "exit status; inspect the files it names, or re-run it yourself)"
+        )
         segs = [
             f"You are one iteration of a loop. Goal: {loop.task}",
-            f"The check `{loop.done_when.command}` is failing. Last 50 lines of its output:\n{tail_text}",
+            f"The check `{loop.done_when.command}` is failing. An excerpt of its output "
+            f"(first and last lines; a long middle is elided — re-run the check for the "
+            f"full log):\n<check_output>\n{body}\n</check_output>",
         ]
         if answer:
             segs.append(f"A human reviewed the last escalation and said: {answer}")
         journal = f".lute/journal/{loop.id}.md"
         segs.append(
-            f"FIRST: read {journal}; your past attempts live there.\n"
-            "LAST: append 1–3 lines to it: what you tried, what you learned,\n"
-            "what the next run must NOT retry. If it exceeds ~100 lines, compact it."
+            f"Start by reading {journal} — your past attempts live there. You may re-run "
+            f"`{loop.done_when.command}` to check your work; the runner re-runs it and its "
+            "exit code is the only verdict, so don't stop on a fix you haven't seen pass. "
+            f"Finish by appending 1–3 lines to {journal}: what you tried, what you learned, "
+            "what the next run must not retry (and, if a human gave direction this run, its "
+            "substance so the next run still honours it). Compact it if it passes ~100 lines."
         )
         prompt = "\n\n".join(segs)
         if self.ctx.nagged.get(str(loop.id)):
             prompt = (
-                f"NAG: your journal {journal} did not change last "
-                "run; do not skip the FIRST and LAST steps below.\n\n"
+                f"Your journal {journal} was unchanged last run — begin by reading it and "
+                "end by appending what you tried and what not to retry.\n\n"
             ) + prompt
         return prompt
 

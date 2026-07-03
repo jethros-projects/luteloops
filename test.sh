@@ -4477,8 +4477,65 @@ PY
   [ "$rc" -ne 0 ] || die "51c) a fileless run attested (no committed exam to bind)"
 }
 
+# ---------------------------------------------------------------- T52
+t_t52() { # worker prompt: the failing-check output is presented as a head+tail
+          # excerpt (a top-anchored diagnostic survives, not just the tail), a
+          # silent check gets an honest exit-only sentinel instead of a dangling
+          # "last N lines" claim, and the output rides inside a <check_output> tag
+  # --- a) a long output: line 1 diagnostic AND the trailing summary both reach the
+  #        prompt; the middle is elided with a marker; all wrapped in the tag; and
+  #        the t8 substring + the fake-agent journal path are preserved.
+  mkrepo "$WORK/t52a"
+  mkdir -p checks
+  cat > checks/verify.sh <<'SH'
+#!/bin/sh
+echo "HEAD-DIAGNOSTIC-MARKER: the real fix is here on line 1"
+i=1; while [ "$i" -le 120 ]; do echo "  ... noise line $i"; i=$((i+1)); done
+echo "TAIL-SUMMARY-MARKER: 1 error total"
+exit 1
+SH
+  chmod +x checks/verify.sh
+  cat > lute.yaml <<EOF
+loop: excerpt
+agent: "$FAKE"
+task: fix it
+done_when: "./checks/verify.sh"
+protected: ["checks/**"]
+budget: 1 runs
+EOF
+  echo '{}' > playbook.json
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  P=prompts/excerpt.run1.txt
+  [ -f "$P" ] || die "52a) no prompt captured: $(cat out.log)"
+  grep -qF 'HEAD-DIAGNOSTIC-MARKER' "$P" || die "52a) head diagnostic evicted (tail-only presentation): $(cat "$P")"
+  grep -qF 'TAIL-SUMMARY-MARKER' "$P" || die "52a) trailing summary missing from the excerpt"
+  grep -qF 'lines elided' "$P" || die "52a) elided middle not marked"
+  { grep -qF '<check_output>' "$P" && grep -qF '</check_output>' "$P"; } || die "52a) check output not wrapped in a tag"
+  grep -qF 'The check `./checks/verify.sh` is failing' "$P" || die "52a) the t8 'is failing' substring broke"
+  grep -qF '.lute/journal/excerpt.md' "$P" || die "52a) journal path broke (fake_agent extracts the loop id from it)"
+
+  # --- b) a silent (boolean) check prints nothing: the prompt names the exit-only
+  #        signal, and never claims N lines of output that never existed.
+  mkrepo "$WORK/t52b"
+  cat > lute.yaml <<EOF
+loop: silent
+agent: "$FAKE"
+task: make it exist
+done_when: "test -f out.txt"
+budget: 1 runs
+EOF
+  echo '{}' > playbook.json
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  P=prompts/silent.run1.txt
+  [ -f "$P" ] || die "52b) no prompt captured: $(cat out.log)"
+  grep -qiF 'printed nothing' "$P" || die "52b) silent check got no exit-only sentinel: $(cat "$P")"
+  if grep -qF 'Last 50 lines' "$P"; then die "52b) dangling 'Last 50 lines' claim over empty output"; fi
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4532,6 +4589,7 @@ desc() {
     t49) echo "no-edit runs   an agent that changes nothing is named in events, console, and card; a run that edits is never flagged" ;;
     t50) echo "wedge-kit      contrib/action maps lute's exit contract onto a CI job; the recipe shape closes hermetically; shipped recipes stay schema-valid" ;;
     t51) echo "attestation    a closed run binds exam hash + base/head SHAs + run count + event chain into a verifiable statement; tampers and un-closed runs are refused, each with its reason" ;;
+    t52) echo "worker-prompt  the failing-check output is a head+tail excerpt (top-anchored diagnostics survive); a silent check gets an exit-only sentinel; output rides in a <check_output> tag" ;;
   esac
 }
 
