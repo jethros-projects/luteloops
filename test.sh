@@ -4641,8 +4641,44 @@ PY
   grep -q 'nothing waiting on you\|inbox' mcp.out || die "54) lute_inbox tool did not return the real CLI output: $(cat mcp.out)"
 }
 
+t_t55() { # colour vocabulary: `lute --help` reads as grouped sections (Start /
+          #  Watch & unblock / Finish / More), keeps its tagline and both honesty
+          #  caveats, and — like every human verb — paints only a real terminal.
+          #  Captured output is byte-plain, so the machine surfaces and every
+          #  grep-based notch stay safe. This locks the same TTY-only contract t53
+          #  proved for the tree, now for help and the lint report.
+  mkrepo "$WORK/t55"
+
+  # --- a) help is grouped, honest, and colourless when captured
+  "$LUTE" --help > h.out 2>&1 || die "55a) --help failed: $(cat h.out)"
+  if grep -q "$(printf '\033')" h.out; then die "55a) --help leaked an ANSI escape (colour must be TTY-only)"; fi
+  grep -q 'while-loop for agents' h.out || die "55a) --help lost its tagline: $(cat h.out)"
+  for section in Start Finish More; do
+    grep -qx "$section" h.out || die "55a) --help is a flat wall, missing section '$section': $(cat h.out)"
+  done
+  grep -qx 'Watch & unblock' h.out || die "55a) --help missing the 'Watch & unblock' section: $(cat h.out)"
+  grep -q 'caged judges skipped' h.out || die "55a) --help dropped the lint honesty caveat: $(cat h.out)"
+  grep -q 'without unanswered cards' h.out || die "55a) --help dropped the status honesty caveat: $(cat h.out)"
+
+  # --- b) the lint report — the most colourful human surface — is byte-plain when
+  #        captured: the verdict word, the summary prefix, and the next-command
+  cat > lute.yaml <<EOF
+loop: root
+agent: "true"
+task: Do the thing.
+done_when: "true"
+budget: 3 runs
+EOF
+  git add lute.yaml && git commit -qm "t55 manifest" >/dev/null 2>&1
+  "$LUTE" lint > l.out 2>&1 || die "55b) lint failed: $(cat l.out)"
+  if grep -q "$(printf '\033')" l.out; then die "55b) captured lint leaked an ANSI escape: $(cat l.out)"; fi
+  grep -Eq '^pass +root' l.out || die "55b) lint verdict row is not plain 'pass root': $(cat l.out)"
+  grep -q '^lint: ' l.out || die "55b) lint summary prefix not plain: $(cat l.out)"
+  grep -q 'next: lute run' l.out || die "55b) lint next-command not plain: $(cat l.out)"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53 t54"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53 t54 t55"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4699,6 +4735,7 @@ desc() {
     t52) echo "worker-prompt  the failing-check output is a head+tail excerpt (top-anchored diagnostics survive); a silent check gets an exit-only sentinel; output rides in a <check_output> tag" ;;
     t53) echo "read-render    watch --snapshot and status draw the loop tree with connectors; colour is TTY-only (no ANSI when captured); ascii degrades the box-drawing" ;;
     t54) echo "mcp-server     lute mcp is a stdio JSON-RPC server exposing every verb as a tool; handshake + tools/list + a real tools/call work; unknown method errors" ;;
+    t55) echo "colour-vocab   lute --help reads as grouped sections + keeps its tagline and honesty caveats; help and the lint report paint only a TTY (byte-plain when captured)" ;;
   esac
 }
 

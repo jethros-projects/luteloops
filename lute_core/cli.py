@@ -24,7 +24,7 @@ import shutil
 import sys
 from importlib import resources
 
-from . import attest, cli_args, judge, processes, schema
+from . import attest, cli_args, judge, processes, render, schema
 from . import __version__
 from .cards import summarize_card
 from .detached import spawn_run, terminal_ok
@@ -47,33 +47,66 @@ SKILL_PATH = "luteloops/SKILL.md"
 SKILLS = (SKILL_PATH,)
 PLAN_PROTECTED = ("lute", "lute.yaml", "lute_core/**", SKILL_PATH)
 
-USAGE = """\
-lute: a while-loop for agents
-usage:
-  lute init [--skill]          scaffold a lute.yaml and .lute/ (--skill: write a local copy of the skill)
-  lute lint [--no-exec] [file] validate schema + dry-run checks (caged judges skipped)
-  lute run [root-id]           run loops until green (--file F, --agent CMD, --plain, --bg, --dry-run)
-  lute once --until C -- TASK   one-shot, no file: run an agent until check C passes
-  lute land [branch]           merge lute/<root> into [branch] iff the root exam still passes
-  lute watch [file]            read-only event snapshot (--snapshot, --json, --filter LOG)
-  lute stop                    stop the active run (and any parallel children) in this repo
-  lute status [file]           may execute checks for loops without unanswered cards
-  lute inbox                   list what's waiting on you (blocked/gated cards)
-  lute answer <loop> "text"    reply to an escalation card in INBOX/
-  lute judge -- "<rubric>"     grade HEAD's diff with the configured judge (the oracle behind done_when: "judge: ...")
-  lute attest [--verify F]     emit (or verify) a statement binding a closed run's verdict to git SHAs
-  lute quarantine [list]       inspect quarantined trusted-exam edits
-  lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
-  lute cron sync|remove        compile schedules: into a managed crontab block
-  lute mcp                     serve every verb as MCP tools over stdio (for Claude Code, Codex, any MCP client)
-a check may exit 75 = "not yet": no agent wakes, no run budget spent; the loop
-re-asks every check_every (default 60s) while any time budget keeps ticking;
-an uncapped not-yet blocks immediately instead of hanging
-gate: human pauses a passing loop for approval and requires cage · exit codes: 0 all closed,
-3 blocked (needs help: lute answer), 4 gated (lute answer <loop> approve)
-new here? → lute init  (scaffold a file)  ·  lute plan "<goal>"  (an agent drafts it)
-then: lute lint  (validate)  →  lute run  (until green)
-"""
+# The top-level help. Verbs grouped by the arc you use them in — start a run,
+# watch and unblock it, finish it — so 16 commands read as four short lists
+# instead of one wall. Signatures are trimmed to the common shape; each verb's
+# own --help carries the full flags. Rendered by usage_text() so colour lands
+# only on a real terminal (piped/captured output stays plain and grep-able).
+_USAGE_GROUPS = (
+    ("Start", (
+        ("init [--skill]", "scaffold a lute.yaml and .lute/"),
+        ('plan "<goal>"', "an agent drafts lute.proposed.yaml from your goal"),
+        ("lint [file]", "validate the manifest, dry-run each exam (caged judges skipped)"),
+        ("run [root-id]", "run the loops until every check is green"),
+        ('once --until C -- "task"', "one-shot: loop an agent until check C passes, no file"),
+    )),
+    ("Watch & unblock", (
+        ("status [file]", "re-run checks for loops without unanswered cards"),
+        ("watch [file]", "read-only snapshot from the event file"),
+        ("inbox", "what is blocked or gated, waiting on you"),
+        ('answer <loop> "text"', "reply to a card, or 'approve' to clear a gate"),
+        ("stop", "stop the active run in this repo"),
+    )),
+    ("Finish", (
+        ("land [branch]", "merge lute/<root> only if the root exam still passes"),
+        ("attest [--verify F]", 'a verifiable "exam passed at SHA" statement'),
+    )),
+    ("More", (
+        ('judge -- "<rubric>"', "grade HEAD's diff with the configured judge"),
+        ("quarantine [list]", "inspect edits held back from protected exams"),
+        ("cron sync|remove", "install the schedules: block into your crontab"),
+        ("mcp", "serve every verb as MCP tools (Claude Code, Codex)"),
+    )),
+)
+
+
+def usage_text() -> str:
+    """Top-level help: grouped, aligned, coloured only on a real terminal.
+
+    Keeps the substring 'while-loop for agents' — several notches read it as the
+    proof that help (and per-verb --help falling back to it) actually printed.
+    """
+    from . import render
+
+    width = max(len(sig) for _, verbs in _USAGE_GROUPS for sig, _ in verbs)
+    out = [render.bold("lute") + " — a while-loop for agents with a real exam", ""]
+    for title, verbs in _USAGE_GROUPS:
+        out.append(render.bold(title))
+        for sig, desc in verbs:
+            keyword, _, rest = sig.partition(" ")
+            label = render.cyan(keyword) + ((" " + rest) if rest else "")
+            gap = " " * (width - len(sig) + 2)
+            out.append(f"  {label}{gap}{desc}")
+        out.append("")
+    out.append("  " + render.dim("lute <verb> --help") + "  a verb's flags"
+               + "     " + render.dim("lute --version") + "  the version")
+    out.append("")
+    out.append(render.bold("New here?") + '  lute init  ->  lute lint  ->  lute run'
+               + '     or  lute plan "<goal>"')
+    out.append(render.dim(
+        "Exit codes  0 done  1 usage  2 internal  "
+        "3 blocked (lute answer)  4 gated (lute answer <loop> approve)"))
+    return "\n".join(out) + "\n"
 
 HELP = {
     "run": "lute run [root-id]: run loops until every done_when is green.\n"
@@ -119,7 +152,7 @@ def need_pos(pos, usage, min_count=0, max_count=None):
 
 def default_file() -> str:
     if not os.path.exists("lute.yaml") and os.path.exists("Luteloops"):
-        print('lute: warning: "Luteloops" is deprecated; rename it to lute.yaml', file=sys.stderr)
+        print(render.warn('lute: warning: "Luteloops" is deprecated; rename it to lute.yaml'), file=sys.stderr)
         return "Luteloops"
     return "lute.yaml"
 
@@ -199,7 +232,7 @@ def load_manifest(path: str, *, run_message: bool = False, shared_root: str | No
     root, schedules, errors = schema.load(path)
     if errors or not root:
         for error in errors:
-            print(f"ERROR: {error}", file=sys.stderr)
+            print(f"{render.err('ERROR:')} {error}", file=sys.stderr)
         raise PreconditionError(f"{path} failed validation; see the errors above or run: lute lint {path}")
     return root, schedules
 
@@ -264,25 +297,26 @@ def cmd_run(args: list[str]) -> int:
     agents = runner.assign_agents(root, opts.get("agent") or ctx.config.get("agent"))
     if opts.get("dry-run"):
         rows = root.flatten()
-        print(f"dry run: {len(rows)} loop(s), run order (children first):")
+        print(f"{render.bold('dry run:')} {len(rows)} loop(s), run order (children first):")
         for _, loop in rows:
-            print(f"  {loop.id}: agent={agents.get(str(loop.id)) or '(none)'}  done_when={loop.done_when.command}")
+            print(f"  {render.cyan(str(loop.id))}: agent={agents.get(str(loop.id)) or '(none)'}  done_when={loop.done_when.command}")
         first = next((loop for _, loop in rows if loop.task is not None), root)
-        print(f"\nfirst prompt → {first.id}\n" + "-" * 40 + "\n" + runner.agents.build_prompt(first, agents.get(str(first.id)) or "", "(no check output yet; dry-run preview)", None))
+        print("\n" + render.dim(f"first prompt → {first.id}") + "\n" + render.dim("-" * 40) + "\n"
+              + runner.agents.build_prompt(first, agents.get(str(first.id)) or "", "(no check output yet; dry-run preview)", None))
         return 0
     if opts.get("skip-if-running"):
         info = runner.active_lock_info()
         if info:
-            print(
+            print(render.dim(
                 f"lute: skip {target.id}; another run is active in this repo "
                 f"(pid {info.get('pid')}, since {info.get('start', '?')})"
-            )
+            ))
             return 0
     # Detach into its own session when asked (--bg) or when a real terminal would
     # otherwise block on a long foreground run; --plain keeps it in the foreground.
     if opts.get("bg") or (not opts.get("plain") and terminal_ok()):
         proc = spawn_run(args, store, ctx.paths.runner_log)
-        print(f"detached: run continues (pid {proc.pid}) · re-attach: lute watch · stop: lute stop")
+        print(f"detached: run continues (pid {proc.pid}) · re-attach: {render.cmd('lute watch')} · stop: {render.cmd('lute stop')}")
         return 0
     ctx.plain = True
     if child_mode:
@@ -360,12 +394,23 @@ def cmd_plan(args: list[str]) -> int:
     )
     runner.run_toplevel(loop, {"plan": agent})
     if opts.get("keep-dag"):
-        print("✔ dag plan closed: review lute.plan.yaml, then lute.proposed.yaml and rename it to lute.yaml")
+        print(render.paint_glyph("✔ dag plan closed: review lute.plan.yaml, then lute.proposed.yaml and rename it to lute.yaml"))
     elif opts.get("dag"):
-        print("✔ dag plan closed: review lute.proposed.yaml and rename it to lute.yaml")
+        print(render.paint_glyph("✔ dag plan closed: review lute.proposed.yaml and rename it to lute.yaml"))
     else:
-        print("✔ plan closed: review lute.proposed.yaml and rename it to lute.yaml")
+        print(render.paint_glyph("✔ plan closed: review lute.proposed.yaml and rename it to lute.yaml"))
     return 0
+
+
+_VERDICT_COLOUR = {"pass": "done", "fail": "blocked", "error": "blocked",
+                   "not_yet": "waiting", "skipped": "pending"}
+
+
+def _paint_verdict_row(row: str) -> str:
+    """Colour a lint row's leading verdict word (pass/fail/error/…) by state;
+    the padding and the rest of the line stay untouched. A no-op when captured."""
+    word = row.split(" ", 1)[0]
+    return render.paint(word, _VERDICT_COLOUR.get(word, "")) + row[len(word):]
 
 
 def cmd_lint(args: list[str]) -> int:
@@ -391,25 +436,26 @@ def cmd_lint(args: list[str]) -> int:
             no_exec=bool(opts.get("no-exec")),
         )
         for row in rows:
-            print(row)
+            print(_paint_verdict_row(row))
         errors.extend(walk_errors)
     for warning in warnings:
-        print(f"warn: {warning}")
+        print(f"{render.warn('warn:')} {warning}")
     for note in notes:
-        print(f"note: {note}")
+        print(f"{render.dim('note:')} {note}")
     for error in errors:
-        print(f"ERROR: {error}")
+        print(f"{render.err('ERROR:')} {error}")
     print(
-        f"lint: {sum(counts.values())} check(s), {counts['pass']} pass, {counts['fail']} fail, {counts['error']} error"
+        f"{render.bold('lint:')} {sum(counts.values())} check(s), {counts['pass']} pass, {counts['fail']} fail, {counts['error']} error"
         + (f", {counts['not_yet']} not-yet" if counts["not_yet"] else "")
         + (f", {counts['skipped']} skipped" if counts["skipped"] else "")
     )
     if not opts.get("no-exec"):
         # A human epilogue; the --no-exec output is a machine-consumed gate.
-        print("exam note: avoid circular exams that pass by echoing the task string; measure behavior or protected ground truth.")
+        print(render.dim("exam note: avoid circular exams that pass by echoing the task string; measure behavior or protected ground truth."))
     if not errors:
         no_agent = any("no agent" in warning for warning in warnings)
-        print("no schema errors; set an agent first (see the warning above), then: lute run" if no_agent else "no schema errors; next: lute run")
+        print(f"{render.ok('no schema errors')}; set an agent first (see the warning above), then: {render.cmd('lute run')}"
+              if no_agent else f"{render.ok('no schema errors')}; next: {render.cmd('lute run')}")
     return 1 if errors else 0
 
 
@@ -424,7 +470,7 @@ def cmd_init(args: list[str]) -> int:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(packaged_skill_body())
-        print(f'scaffolded {path}; now: lute plan "<goal>"')
+        print("scaffolded " + path + "; now: " + render.cmd('lute plan "<goal>"'))
         return 0
     if os.path.exists("lute.yaml"):
         raise PreconditionError("lute.yaml already exists")
@@ -441,7 +487,8 @@ def cmd_init(args: list[str]) -> int:
                 'done_when: "false"\nbudget: 10 runs\n')
     if not store.is_regular_file(ctx.paths.config):
         store.safe_write_regular(ctx.paths.config, "# lute config\n# agent: codex exec --sandbox workspace-write\n# judge: claude -p\n# cage: docker\n")
-    print("initialized lute.yaml and .lute/; set an agent (uncomment agent:, or use --agent / config), replace the task: and done_when: lines, then: lute lint")
+    print("initialized lute.yaml and .lute/; set an agent (uncomment agent:, or use --agent / config), "
+          "replace the task: and done_when: lines, then: " + render.cmd("lute lint"))
     return 0
 
 
@@ -466,14 +513,15 @@ def cmd_answer(args: list[str]) -> int:
     error = runner.cards.answer_card(pos[0], pos[1])
     if error:
         raise UsageError(error)
+    undo = render.dim(f"(to change it first, edit or delete {path})")
     if card and card.kind == "ready":
         if pos[1].strip() == "approve":
-            msg = f"answer recorded: the next run of {pos[0]} re-verifies and seals the gate if it still passes"
+            msg = f"{render.ok('answer recorded')}: the next run of {pos[0]} re-verifies and seals the gate if it still passes"
         else:
-            msg = f"answer recorded: non-approve text will not seal {pos[0]}; the gate remains closed until you answer approve"
-        print(f"{msg} (to change it first, edit or delete {path})")
+            msg = f"{render.ok('answer recorded')}: non-approve text will not seal {pos[0]}; the gate remains closed until you answer approve"
+        print(f"{msg} {undo}")
     else:
-        print(f"answer recorded: the next run of {pos[0]} injects it and refreshes its budget once (to change it first, edit or delete {path})")
+        print(f"{render.ok('answer recorded')}: the next run of {pos[0]} injects it and refreshes its budget once {undo}")
     return 0
 
 
@@ -487,12 +535,13 @@ def cmd_quarantine(args: list[str]) -> int:
     if verb == "list":
         need_pos(pos, "usage: lute quarantine [list|diff <id>|drop <id>|drop --all]", 0, 1)
         if not records:
-            print("quarantine: empty")
+            print(render.dim("quarantine: empty"))
             return 0
         for record in records:
             paths_text = ", ".join(record.get("paths") or [])
             count = len(record.get("paths") or [])
-            print(f"{record['id']}  {record.get('loop', '')} {record.get('run', '')}  {count} file(s)  {paths_text}")
+            print(f"{render.cyan(record['id'])}  {record.get('loop', '')} {record.get('run', '')}  "
+                  f"{count} file(s)  {render.dim(paths_text)}")
         return 0
     if verb == "diff":
         need_pos(pos, "usage: lute quarantine diff <id>", 2, 2)
@@ -507,7 +556,7 @@ def cmd_quarantine(args: list[str]) -> int:
             for record in records:
                 if record.get("_dir"):
                     shutil.rmtree(record["_dir"], ignore_errors=True)
-            print(f"dropped {len(records)} quarantine record(s)")
+            print(render.ok(f"dropped {len(records)} quarantine record(s)"))
             return 0
         if opts.get("all"):
             raise UsageError("usage: lute quarantine drop <id|--all>")
@@ -517,7 +566,7 @@ def cmd_quarantine(args: list[str]) -> int:
         if not record:
             raise UsageError(f"no quarantine record {qid}")
         shutil.rmtree(record["_dir"], ignore_errors=True)
-        print(f"dropped quarantine {qid}")
+        print(render.ok(f"dropped quarantine {qid}"))
         return 0
     raise UsageError("usage: lute quarantine [list|diff <id>|drop <id>|drop --all]")
 
@@ -543,7 +592,7 @@ def cmd_watch(args: list[str]) -> int:
         render_json(root, ctx.paths.events, runner.cards)
     else:
         if not opts.get("snapshot") and not terminal_ok():
-            print("lute: no interactive terminal here; one-shot snapshot instead:", file=sys.stderr)
+            print(render.dim("lute: no interactive terminal here; one-shot snapshot instead:"), file=sys.stderr)
         render_snapshot(root, ctx.paths.events)
     return 0
 
@@ -571,7 +620,7 @@ def cmd_stop(args: list[str]) -> int:
     ctx, git, store, runner = make_runtime()
     lock = ctx.paths.lock
     if not store.is_regular_file(lock):
-        print("no active run in this repo")
+        print(render.dim("no active run in this repo"))
         return 0
     try:
         with open(lock, encoding="utf-8") as f:
@@ -585,19 +634,21 @@ def cmd_stop(args: list[str]) -> int:
     owned = processes.owns(pid, git.root, RUN_MARKER) if isinstance(pid, int) and pid > 0 else False
     if owned is False:
         store.remove_runner_file(lock)
-        print(f"no active run here; cleared a stale lock (pid {pid})")
+        print(render.dim(f"no active run here; cleared a stale lock (pid {pid})"))
         return 0
     if owned is None:
         print(
-            f"could not confirm pid {pid} is this repo's runner; lock preserved. "
-            f"If it is, try: kill -INT {pid}",
+            render.warn(
+                f"could not confirm pid {pid} is this repo's runner; lock preserved. "
+                f"If it is, try: kill -INT {pid}"
+            ),
             file=sys.stderr,
         )
         return 1
     if processes.stop_run(pid):
-        print(f"stopped run pid {pid}; a half-done iteration is dropped on the next run (state is git-derived)")
+        print(f"{render.ok('stopped run pid ' + str(pid))}; a half-done iteration is dropped on the next run (state is git-derived)")
         return 0
-    print(f"could not confirm pid {pid} stopped; it may still be running; check with: kill -0 {pid}", file=sys.stderr)
+    print(render.warn(f"could not confirm pid {pid} stopped; it may still be running; check with: kill -0 {pid}"), file=sys.stderr)
     return 1
 
 
@@ -659,7 +710,7 @@ def main(argv=None) -> int:
         return 0
     if any(arg in ("-h", "--help", "help") for arg in argv):
         verb = argv[0] if argv else ""
-        sys.stdout.write(HELP[verb] + "\n" if verb in HELP else USAGE)
+        sys.stdout.write(HELP[verb] + "\n" if verb in HELP else usage_text())
         return 0
     commands = {
         "init": cmd_init,
@@ -682,18 +733,18 @@ def main(argv=None) -> int:
     if argv and argv[0] not in commands:
         near = difflib.get_close_matches(argv[0], commands, 1)
         if near:
-            print(f"lute: unknown command {argv[0]!r}; did you mean {near[0]}?\n", file=sys.stderr)
+            print(render.dim(f"lute: unknown command {argv[0]!r}; did you mean {near[0]}?") + "\n", file=sys.stderr)
     if not argv or argv[0] not in commands:
-        print(USAGE, end="")
+        print(usage_text(), end="")
         return 1
     try:
         return commands[argv[0]](argv[1:])
     except (Blocked, Gated) as exc:
         if str(exc) not in ("blocked", "gated"):
-            print(f"lute: {exc}", file=sys.stderr)
+            print(f"{render.err('lute:')} {exc}", file=sys.stderr)
         return int(exc.exit_code)
     except LuteError as exc:
-        print(f"lute: {exc}", file=sys.stderr)
+        print(f"{render.err('lute:')} {exc}", file=sys.stderr)
         return int(exc.exit_code)
 
 

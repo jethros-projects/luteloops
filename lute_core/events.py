@@ -41,6 +41,9 @@ def output_line(line: str) -> None:
         for glyph, replacement in ASCII_MAP.items():
             line = line.replace(glyph, replacement)
         line = line.encode("ascii", "replace").decode("ascii")
+    else:
+        from . import render  # lazy: render imports us, so import it at call time
+        line = render.paint_glyph(line)
     print(line, flush=True)
 
 
