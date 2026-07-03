@@ -122,7 +122,7 @@ Rules that make exams trustworthy:
   the repo - but only when they can fail: a declared test/build script that
   exits 0 unconditionally is a placeholder in disguise; note it in a comment
   and anchor the exam elsewhere.
-- **Terse output.** The exam's last 50 lines become the next prompt. Use failure-only reporters (`--reporter=dot`, `-q`, `2>&1 | tail`). A noisy exam is a worse teacher.
+- **Terse output.** A head+tail excerpt of the exam's output becomes the next prompt (first and last lines; a long middle is elided), so keep failures legible: use failure-only reporters (`--reporter=dot`, `-q`, `2>&1 | tail`). A noisy exam is a worse teacher.
 - **Cheap enough to re-run.** Every check is capped by `LUTE_CHECK_TIMEOUT`
   (600s default); a suite slower than the cap reads as failed forever - raise
   the env in the run environment or narrow the exam. A loop administers its

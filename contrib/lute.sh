@@ -24,8 +24,8 @@ while :; do
   if [ "$n" -ge "$RUNS" ]; then echo "blocked: $ID after $n runs" >&2; exit 3; fi
   if [ -z "$TASK" ]; then echo "blocked: $ID (no task)" >&2; exit 3; fi
   n=$((n + 1)); t0=$(date +%s)
-  printf 'You are one iteration of a loop. Goal: %s\n\nThe check `%s` is failing. Last 50 lines of its output:\n%s\n\nFIRST: read .lute/journal/%s.md - your past attempts live there.\nLAST: append 1–3 lines to it - what you tried, what you learned,\nwhat the next run must NOT retry. If it exceeds ~100 lines, compact it.\n' \
-    "$TASK" "$CHECK" "$(printf %s "$out" | tail -50)" "$ID" | sh -c "$AGENT"
+  printf 'You are one iteration of a loop. Goal: %s\n\nThe check `%s` is failing. An excerpt of its output (first and last lines):\n<check_output>\n%s\n</check_output>\n\nStart by reading .lute/journal/%s.md - your past attempts live there.\nFinish by appending 1–3 lines to it - what you tried, what you learned,\nwhat the next run must not retry. Compact it if it passes ~100 lines.\n' \
+    "$TASK" "$CHECK" "$(printf %s "$out" | { head -15; echo '...'; tail -45; })" "$ID" | sh -c "$AGENT"
   git add -A && git commit -q --allow-empty -m "lute($ID): run $n"
   printf '{"ts": "%s", "loop": "%s", "run": %d, "duration": %d, "exit": 0}\n' \
     "$(date -u +%FT%TZ)" "$ID" "$n" "$(($(date +%s) - t0))" >> .lute/ledger.jsonl

@@ -18,7 +18,7 @@ import subprocess
 
 from .context import AppContext
 from .domain import CheckResult, LoopSpec, Verdict
-from .formatting import tail
+from .formatting import excerpt
 from .git_repo import GitRepo
 from . import processes
 
@@ -93,7 +93,7 @@ def run_shell_check(command: str, timeout: float, *, classify: bool = False, env
         verdict = "error"
     else:
         verdict = "fail"
-    return verdict, tail(stdout, 50)
+    return verdict, excerpt(stdout)
 
 
 class CheckRunner:
@@ -117,5 +117,5 @@ class CheckRunner:
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = judge.grade(rubric, self.ctx, self.git, self.cage_wrap)
-        output = tail(out.getvalue() + err.getvalue(), 50)
+        output = excerpt(out.getvalue() + err.getvalue())
         return CheckResult(Verdict.PASS if rc == 0 else Verdict.FAIL, output)
