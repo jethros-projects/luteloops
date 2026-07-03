@@ -13,6 +13,7 @@ its truth, not tampering.
 
 from __future__ import annotations
 
+from . import render
 from .cards import CardService
 from .checks import CheckRunner
 from .domain import LoopSpec, Verdict
@@ -88,4 +89,5 @@ def land(
             block(f"root exam `{root.done_when.command}` fails against the merged tree. NOT landed ({target} restored); the branches integrate badly; fix on {branch} and re-run")
     finally:
         runner.release_lock()
-    print(f"✔ landed {branch} → {target}, root exam re-verified green  (tidy up: git branch -d {branch})")
+    print(render.paint_glyph(f"✔ landed {branch} → {target}, root exam re-verified green")
+          + f"  (tidy up: {render.cmd('git branch -d ' + branch)})")

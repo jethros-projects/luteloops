@@ -42,9 +42,50 @@ def dim(text: str) -> str:
     return _sgr(text, "2")
 
 
+def bold(text: str) -> str:
+    return _sgr(text, "1")
+
+
+def cyan(text: str) -> str:
+    return _sgr(text, "36")
+
+
 def paint(text: str, word: str) -> str:
     """Colour `text` by the state `word` it represents (a glyph, usually)."""
     return _sgr(text, _COLOUR.get(word, ""))
+
+
+# Semantic palette for human-facing lines — one vocabulary across every verb, so
+# a command reads the same in help, in the lint report, and in a run's summary.
+def ok(text: str) -> str:      # a success / a closed loop
+    return paint(text, "done")
+
+
+def warn(text: str) -> str:    # an advisory the run can survive
+    return paint(text, "waiting")
+
+
+def err(text: str) -> str:     # a stop-the-line problem
+    return paint(text, "blocked")
+
+
+def cmd(text: str) -> str:     # a command the reader should run next (verbs are cyan)
+    return cyan(text)
+
+
+# Narration lines begin with a state glyph; colour just that glyph so the rest of
+# the line stays legible against any theme. ASCII-degraded lines have no glyph to
+# match, and colour is already off there, so this is a no-op in that case.
+_GLYPH_COLOUR = {
+    "✔": "done", "↻": "running", "▶": "running", "⏳": "waiting",
+    "◌": "pending", "✗": "blocked", "✋": "gated", "‖": "parallel",
+    "⚠": "waiting", "↳": "pending", "·": "pending",
+}
+
+
+def paint_glyph(line: str) -> str:
+    word = _GLYPH_COLOUR.get(line[:1])
+    return paint(line[0], word) + line[1:] if word else line
 
 
 def rule(text: str) -> str:
