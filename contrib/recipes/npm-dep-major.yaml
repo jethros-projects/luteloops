@@ -1,0 +1,42 @@
+# Recipe: one npm dependency, one major bump - the shape of a Renovate or
+# Dependabot PR that broke. Point lute at the bot's branch and let the loop
+# repair what the bump broke (docs/UPGRADE-BOT.md shows the checkout flow).
+#
+# Exam design (SKILL.md §4): the bot already edited package.json, so there is
+# no bump loop - the exams only prove the bumped tree works. Every check
+# installs from the lockfile (npm ci) so the verdict is about the committed
+# tree. The root exam restates the merge bar: install, suite, build. Tests
+# are protected: a "fix" that deletes the failing test is quarantined.
+#
+# Engine rights: repair work sometimes needs npm (moving a peer dep, adding
+# a shim package), so grant command rights - best inside cage: docker.
+#
+# Adapt: replace DEP with the bumped package if you want the extra guard
+# that it stays bumped (see the optional still-bumped loop below); swap npm
+# commands for your package manager.
+loop: dep-major-repair
+# agent: set your engine here (or pass --agent); it needs command
+# rights, not just edit rights - see "Engine rights" above. e.g.:
+# agent: claude -p --dangerously-skip-permissions
+budget: 24h
+done_when: "npm ci --no-audit --no-fund && npm test && npm run build"
+protected: ["tests/**", "checks/**"]
+loops:
+  # Optional guard: keep the bot's bump. Uncomment and pin DEP + MAJOR so a
+  # lazy "fix" that downgrades the dependency can never close the loop.
+  # - loop: still-bumped
+  #   task: The bump itself is the bot's work; if this exam fails, restore the
+  #     bumped version in package.json and the lockfile rather than downgrading.
+  #   done_when: "node -e 'const d={...require(\"./package.json\").dependencies,...require(\"./package.json\").devDependencies}; process.exit(/^[~^]?MAJOR\\./.test(d[\"DEP\"]||\"\")?0:1)'"
+  #   budget: 2 runs
+  - loop: fix-build
+    task: Make the build pass against the bumped dependency. Follow the
+      dependency's migration guide; no downgrades, no pinning back.
+    done_when: "npm ci --no-audit --no-fund && npm run build"
+    budget: 10 runs
+  - loop: fix-tests
+    task: Repair tests broken by the bump. Never delete, skip, or weaken a
+      test.
+    done_when: "npm ci --no-audit --no-fund && npm test"
+    confirm: 2
+    budget: 10 runs

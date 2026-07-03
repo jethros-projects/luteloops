@@ -24,7 +24,8 @@ import shutil
 import sys
 from importlib import resources
 
-from . import cli_args, judge, processes, schema
+from . import attest, cli_args, judge, processes, schema
+from . import __version__
 from .cards import summarize_card
 from .detached import spawn_run, terminal_ok
 from .config import load_config
@@ -41,10 +42,10 @@ from .state_store import StateStore
 from .status import render_inbox, render_status
 from .watch import render_filtered, render_json, render_snapshot
 
-VERSION = "lute 0.1.0"
+VERSION = f"lute {__version__}"
 SKILL_PATH = "luteloops/SKILL.md"
 SKILLS = (SKILL_PATH,)
-PLAN_PROTECTED = ("lute", "lute_core/**", SKILL_PATH)
+PLAN_PROTECTED = ("lute", "lute.yaml", "lute_core/**", SKILL_PATH)
 
 USAGE = """\
 lute: a while-loop for agents
@@ -60,9 +61,11 @@ usage:
   lute inbox                   list what's waiting on you (blocked/gated cards)
   lute answer <loop> "text"    reply to an escalation card in INBOX/
   lute judge -- "<rubric>"     grade HEAD's diff with the configured judge (the oracle behind done_when: "judge: ...")
+  lute attest [--verify F]     emit (or verify) a statement binding a closed run's verdict to git SHAs
   lute quarantine [list]       inspect quarantined trusted-exam edits
   lute plan [--dag] [--keep-dag] "<goal>"  an agent drafts lute.proposed.yaml via the skill
   lute cron sync|remove        compile schedules: into a managed crontab block
+  lute mcp                     serve every verb as MCP tools over stdio (for Claude Code, Codex, any MCP client)
 a check may exit 75 = "not yet": no agent wakes, no run budget spent; the loop
 re-asks every check_every (default 60s) while any time budget keeps ticking;
 an uncapped not-yet blocks immediately instead of hanging
@@ -91,6 +94,10 @@ HELP = {
     "plan": 'lute plan [--dag] [--keep-dag] "<goal>": draft lute.proposed.yaml via the skill.\n'
     "  --dag       ask the planner to reason from a workflow DAG, then emit normal Lute YAML\n"
     "  --keep-dag  with --dag, also write lute.plan.yaml as a review/debug artifact.",
+    "attest": "lute attest [--file F] [--verify STATEMENT]: the closed run's verdict as a verifiable statement.\n"
+    "  Emits an in-toto Statement (stdout) binding the pinned exam's hash, the base and\n"
+    "  head SHAs, the run count, and a hash chain over the events. --verify re-derives\n"
+    "  every fact from the repo and refuses on the first mismatch, naming it.",
 }
 
 QID_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -367,12 +374,14 @@ def cmd_lint(args: list[str]) -> int:
     ctx, git, store, runner = make_runtime()
     path = pos[0] if pos else default_file()
     if not os.path.exists(path):
+        if path.endswith(".proposed.yaml"):
+            raise PreconditionError(f"no {path} here yet; drafting it is the task — write {path} for the goal, then lint again")
         raise PreconditionError(f'no {path} here; scaffold one: lute init   (or draft it: lute plan "<goal>")')
     path = trusted_file(path, "manifest", ctx.shared_root)
     root, schedules, errors = schema.load(path)
-    warnings, counts = [], {"pass": 0, "fail": 0, "error": 0, "not_yet": 0, "skipped": 0}
+    warnings, notes, counts = [], [], {"pass": 0, "fail": 0, "error": 0, "not_yet": 0, "skipped": 0}
     if root:
-        rows, warnings, walk_errors, counts = lint_manifest(
+        rows, warnings, notes, walk_errors, counts = lint_manifest(
             root,
             schedules,
             ctx,
@@ -386,6 +395,8 @@ def cmd_lint(args: list[str]) -> int:
         errors.extend(walk_errors)
     for warning in warnings:
         print(f"warn: {warning}")
+    for note in notes:
+        print(f"note: {note}")
     for error in errors:
         print(f"ERROR: {error}")
     print(
@@ -393,7 +404,9 @@ def cmd_lint(args: list[str]) -> int:
         + (f", {counts['not_yet']} not-yet" if counts["not_yet"] else "")
         + (f", {counts['skipped']} skipped" if counts["skipped"] else "")
     )
-    print("exam note: avoid circular exams that pass by echoing the task string; measure behavior or protected ground truth.")
+    if not opts.get("no-exec"):
+        # A human epilogue; the --no-exec output is a machine-consumed gate.
+        print("exam note: avoid circular exams that pass by echoing the task string; measure behavior or protected ground truth.")
     if not errors:
         no_agent = any("no agent" in warning for warning in warnings)
         print("no schema errors; set an agent first (see the warning above), then: lute run" if no_agent else "no schema errors; next: lute run")
@@ -421,11 +434,13 @@ def cmd_init(args: list[str]) -> int:
     with open("lute.yaml", "w", encoding="utf-8") as f:
         f.write("# lute.yaml - a luteloops file: turtles all the way down for the lute runner (see\n"
                 "# README.md and the packaged luteloops skill for how to decompose a goal).\n"
-                "loop: my-goal\n# agent: claude -p\n"
+                "loop: my-goal\n"
+                "# agent: codex exec --sandbox workspace-write\n"
+                "# agent: claude -p --permission-mode acceptEdits\n"
                 "task: Replace me with instructions for one agent iteration.\n"
                 'done_when: "false"\nbudget: 10 runs\n')
     if not store.is_regular_file(ctx.paths.config):
-        store.safe_write_regular(ctx.paths.config, "# lute config\n# agent: claude -p\n# judge: codex exec\n# cage: docker\n")
+        store.safe_write_regular(ctx.paths.config, "# lute config\n# agent: codex exec --sandbox workspace-write\n# judge: claude -p\n# cage: docker\n")
     print("initialized lute.yaml and .lute/; set an agent (uncomment agent:, or use --agent / config), replace the task: and done_when: lines, then: lute lint")
     return 0
 
@@ -599,6 +614,28 @@ def cmd_land(args: list[str]) -> int:
     return 0
 
 
+def cmd_attest(args: list[str]) -> int:
+    pos, opts = parse(args, {"--file", "--verify"})
+    need_pos(pos, "usage: lute attest [--file F] [--verify STATEMENT]", 0, 0)
+    ctx, git, store, runner = make_runtime()
+    if opts.get("verify"):
+        print(attest.verify(ctx, git, opts["verify"]))
+        return 0
+    manifest = os.path.abspath(opts.get("file") or default_file())
+    manifest = trusted_file(manifest, "manifest", ctx.shared_root)
+    root, _ = load_manifest(manifest, shared_root=ctx.shared_root)
+    ctx.manifest_path = manifest
+    print(json.dumps(attest.statement(ctx, git, root, runner.cards), indent=2))
+    return 0
+
+
+def cmd_mcp(args: list[str]) -> int:
+    pos, _ = parse(args, set())
+    need_pos(pos, "usage: lute mcp   (a stdio MCP server; register it with your agent, don't run it by hand)", 0, 0)
+    from . import mcp
+    return mcp.serve()
+
+
 def cmd_cron(args: list[str]) -> int:
     if args not in (["sync"], ["remove"]):
         raise UsageError("usage: lute cron sync|remove")
@@ -638,7 +675,9 @@ def main(argv=None) -> int:
         "stop": cmd_stop,
         "land": cmd_land,
         "judge": cmd_judge,
+        "attest": cmd_attest,
         "quarantine": cmd_quarantine,
+        "mcp": cmd_mcp,
     }
     if argv and argv[0] not in commands:
         near = difflib.get_close_matches(argv[0], commands, 1)

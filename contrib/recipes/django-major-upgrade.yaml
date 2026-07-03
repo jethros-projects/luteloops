@@ -1,0 +1,43 @@
+# Recipe: Django major upgrade (4.2 -> 5.x shown; adjust the version pin).
+#
+# Exam design (SKILL.md §4): the exams run in your active virtualenv, so each
+# check re-installs the project first (pip install -e .) and the verdict is
+# about the committed dependency declaration, not whatever was importable
+# before the run. bump-django is the if-trick; deprecations is the ratchet -
+# Django screams about removals one major early, so an exam that fails on
+# DeprecationWarning today is the cheapest insurance for the next major. Tests
+# stay protected.
+#
+# Engine rights: pip must run, so grant command rights - best inside
+# cage: docker. See README, the engine gotchas.
+#
+# Adapt: pin your target major in bump-django's check; point the test
+# command at your suite runner (pytest, manage.py test); drop the
+# deprecations loop if your suite is not warning-clean yet and file it as
+# follow-up work instead.
+loop: django-major
+# agent: set your engine here (or pass --agent); it needs command
+# rights, not just edit rights - see "Engine rights" above. e.g.:
+# agent: claude -p --dangerously-skip-permissions
+budget: 48h
+done_when: "python3 -m pip install -q -e . && python3 -m pytest -q"
+protected: ["tests/**", "checks/**"]
+loops:
+  - loop: bump-django           # if-trick: skipped when already on the target major
+    task: Raise the Django requirement to >=5,<6 in the project's dependency
+      declaration (pyproject.toml or requirements) and re-install. Change
+      nothing else.
+    done_when: "python3 -m pip install -q -e . && python3 -c 'import django; raise SystemExit(0 if django.VERSION[0] == 5 else 1)'"
+    budget: 3 runs
+  - loop: fix-suite
+    task: Repair everything the upgrade broke - URL patterns, settings,
+      removed aliases, third-party shims. Never delete, skip, or weaken a
+      test; no version pins back below the target.
+    done_when: "python3 -m pip install -q -e . && python3 -c 'import django; raise SystemExit(0 if django.VERSION[0] == 5 else 1)' && python3 -m pytest -q"
+    confirm: 2
+    budget: 20 runs
+  - loop: deprecations
+    task: Silence every Django deprecation warning the suite still raises,
+      by fixing the call sites, so the NEXT major starts clean.
+    done_when: "python3 -m pip install -q -e . && python3 -c 'import django; raise SystemExit(0 if django.VERSION[0] == 5 else 1)' && python3 -W error::DeprecationWarning -m pytest -q"
+    budget: 10 runs

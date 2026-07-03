@@ -68,6 +68,16 @@ environment, and `~/.lute/keys` simply aren't there — *secrets policy is
 absence*. `done_when` checks stay on the host (they're yours); judges run in an
 empty working directory over the stdin diff only.
 
+**Attestation (`lute attest`).** A closed run can emit a statement binding the
+runner's verdict to facts that re-derive from immutable git objects: the
+pinned exam's hash at the trusted base, the base and head SHAs, the
+`base..head` run-commit count, and a hash chain over the event stream.
+`--verify` re-derives each fact and refuses on the first mismatch. Its scope
+is exactly that binding: it does **not** claim the exam would pass if re-run
+today (that is `lute land`'s job), and an unsigned statement does not prove
+*who* ran the loop — signing belongs to a CI identity, not the runner
+(`docs/ATTESTATION.md`).
+
 ## Explicitly out of scope
 
 These are named boundaries, not oversights: each is a deliberate engineering

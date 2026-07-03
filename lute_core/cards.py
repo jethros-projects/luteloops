@@ -168,7 +168,7 @@ class CardService:
             f"BLOCKED: needs input after {runs} run{'s' if runs != 1 else ''} · {human(secs)}\n"
             + (note + "\n" if note else "")
             + f"Check: {loop.done_when.command}\n"
-            f"Last failure (tail):\n{tail(tail_text, 10)}\n"
+            f"Last failure (excerpt):\n{tail_text}\n"
             f"Journal (last 5 lines):\n{jtail}\n"
             f"→ One question, stated by the runner: what should change?\n"
             f'Answer with: lute answer {lid} "..."\n'

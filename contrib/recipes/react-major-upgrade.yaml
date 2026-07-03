@@ -1,0 +1,44 @@
+# Recipe: React major upgrade (18 -> 19 shown; adjust the two version pins).
+#
+# Exam design (SKILL.md §4): every check installs from the lockfile first
+# (npm ci), so the exam administers the tree the agent actually left, not a
+# stale node_modules. The root exam is the whole goal restated mechanically:
+# clean install, full suite, production build. bump-react is the if-trick -
+# a repo already on 19 skips straight to repair work. Tests are protected:
+# an upgrade that "passes" by deleting the failing test is quarantined, not
+# committed.
+#
+# Engine rights: an upgrade must run npm (regenerating the lockfile by hand
+# is not realistic work), so the agent needs command rights, not just edit
+# rights - best granted inside cage: docker. See README, the engine gotchas.
+#
+# Adapt: pin your target major in the `19` checks; swap npm for your
+# package manager; put any repo-specific smoke script under checks/ and it
+# is already protected. The pin rides every later exam on purpose: a
+# "repair" that downgrades react must fail the loop that shipped it, not
+# reach a task-less root that can only escalate.
+loop: react-major
+# agent: set your engine here (or pass --agent); it needs command
+# rights, not just edit rights - see "Engine rights" above. e.g.:
+# agent: claude -p --dangerously-skip-permissions
+budget: 48h
+done_when: "node -e 'const d={...require(\"./package.json\").dependencies}; process.exit(/^[~^]?19\\./.test(d.react||\"\")?0:1)' && npm ci --no-audit --no-fund && npm test && npm run build"
+protected: ["tests/**", "checks/**"]
+loops:
+  - loop: bump-react            # if-trick: skipped when package.json is already on 19
+    task: Upgrade react and react-dom to ^19 in package.json and regenerate
+      the lockfile (npm install). Change nothing else.
+    done_when: "node -e 'const d={...require(\"./package.json\").dependencies}; process.exit(/^[~^]?19\\./.test(d.react||\"\")?0:1)'"
+    budget: 3 runs
+  - loop: fix-build
+    task: Make the production build pass on React 19. No downgrades, and no
+      suppressing errors with @ts-ignore/@ts-expect-error/@ts-nocheck or
+      disabled rules.
+    done_when: "node -e 'const d={...require(\"./package.json\").dependencies}; process.exit(/^[~^]?19\\./.test(d.react||\"\")?0:1)' && npm ci --no-audit --no-fund && npm run build"
+    budget: 15 runs
+  - loop: fix-tests
+    task: Repair tests broken by the upgrade. Never delete, skip, or weaken
+      a test; regenerate snapshots only where the new output is correct.
+    done_when: "node -e 'const d={...require(\"./package.json\").dependencies}; process.exit(/^[~^]?19\\./.test(d.react||\"\")?0:1)' && npm ci --no-audit --no-fund && npm test"
+    confirm: 2
+    budget: 15 runs

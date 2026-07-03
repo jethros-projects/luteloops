@@ -86,6 +86,10 @@ class Runner:
         # Quarantines whose story has not yet been told: a run-time quarantine
         # is reported by the NEXT administration of that loop's check.
         self.pending_quarantines: dict[str, list] = {}
+        # Consecutive runs that changed nothing, per loop - the signature of a
+        # miswired engine (an interactive CLI, missing permission flags), which
+        # must never burn a budget silently.
+        self.idle_runs: dict[str, int] = {}
 
     def ledger_entries(self) -> list[dict]:
         return read_entries(self.ctx.paths.ledger)
@@ -185,7 +189,7 @@ class Runner:
                 self.cards.supersede(str(loop.id), approved)
                 approved = False
             if self.budget.spent(loop, waited_by_loop.get(str(loop.id), 0.0)):
-                self.cards.escalate(loop, tail_text)
+                self.cards.escalate(loop, tail_text, note=self.idle_note(loop))
             self.run_agent_iteration(loop, agents_by_loop, tail_text, answer, baseline)
             answer = None
         self.close_loop(loop, approved)
@@ -250,9 +254,18 @@ class Runner:
         time.sleep(loop.every)
         return waited + loop.every
 
+    def idle_note(self, loop: LoopSpec) -> str:
+        idle = self.idle_runs.get(str(loop.id), 0)
+        if idle < 2:
+            return ""
+        return (
+            f"The last {idle} agent runs made no edits at all. Is the agent command "
+            "non-interactive and allowed to edit files? (README: the agent contract.)"
+        )
+
     def run_agent_iteration(self, loop: LoopSpec, agents_by_loop: dict[str, str | None], tail_text: str, answer: str | None, baseline) -> None:
         if self.budget.spent(loop):
-            self.cards.escalate(loop, tail_text)
+            self.cards.escalate(loop, tail_text, note=self.idle_note(loop))
         if loop.task is None:
             self.cards.escalate(loop, tail_text)
         trusted = snapshot(self.ctx.paths.ledger)
@@ -274,7 +287,20 @@ class Runner:
             self.agents.build_prompt(loop, agent_command or "", tail_text, answer),
             os.path.join(self.ctx.paths.logs, f"{loop_id}.run{run_number}.log"),
         )
-        self.events.emit("agent_end", loop_id, run=run_number, exit=returncode, secs=duration)
+        edited = (
+            self.git.head() != pre_agent_head
+            or bool(self.git.status_porcelain("-uno").strip())
+            or bool(self.git.untracked() - self.ctx.run_pre_untracked)
+        )
+        self.idle_runs[loop_id] = 0 if edited else self.idle_runs.get(loop_id, 0) + 1
+        self.events.emit(
+            "agent_end",
+            loop_id,
+            run=run_number,
+            exit=returncode,
+            secs=duration,
+            **({} if edited else {"edits": False}),
+        )
         current_branch = self.git.current_branch()
         if current_branch != expected_branch:
             self.git.force_branch(expected_branch, pre_agent_head)

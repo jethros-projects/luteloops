@@ -164,6 +164,9 @@ def _test_and_check_files(files: list[str]) -> list[str]:
     names: list[str] = []
     for path in files:
         base = os.path.basename(path).lower()
+        # "check" must stand alone in the name: checkout.ts is product code,
+        # check-reports.sh and health_check.py are exam material.
+        base_words = re.split(r"[^a-z]+", base)
         if (
             path.startswith("tests/")
             or path.startswith("test/")
@@ -171,11 +174,20 @@ def _test_and_check_files(files: list[str]) -> list[str]:
             or path.startswith("scripts/check")
             or path.startswith("scripts/test")
             or base.startswith("test")
-            or "check" in base
+            or "check" in base_words
             or base in {"pytest.ini", "tox.ini", "noxfile.py"}
         ):
             names.append(path)
     return names
+
+
+# Framework names rarely appear in paths; their file extensions do.
+FRAMEWORK_EXTENSIONS = {
+    "react": (".jsx", ".tsx"),
+    "vue": (".vue",),
+    "svelte": (".svelte",),
+    "typescript": (".ts", ".tsx"),
+}
 
 
 def _goal_related_files(goal: str, files: list[str]) -> list[str]:
@@ -186,7 +198,12 @@ def _goal_related_files(goal: str, files: list[str]) -> list[str]:
     }
     if not terms:
         return []
-    matches = [path for path in files if any(term in path.lower() for term in terms)]
+    extensions = tuple(ext for term in terms for ext in FRAMEWORK_EXTENSIONS.get(term, ()))
+    matches = [
+        path
+        for path in files
+        if any(term in path.lower() for term in terms) or (extensions and path.lower().endswith(extensions))
+    ]
     return matches[:LIST_LIMIT]
 
 
@@ -216,6 +233,16 @@ def repo_briefing(goal: str, git: GitRepo) -> str:
     """Return a bounded planning context snapshot for an agent drafting a manifest."""
     root = git.root
     files = _repo_files(root)
+    try:
+        untracked = git.untracked()
+    except Exception:  # pragma: no cover - defensive for unusual git states
+        untracked = set()
+
+    def labeled(paths: list[str]) -> list[str]:
+        # An uncommitted file is a different kind of fact: an exam anchored on
+        # one trusts state a branch base cannot restore.
+        return [f"{path} (untracked)" if path in untracked else path for path in paths]
+
     commands = (
         _package_scripts()
         + _pyproject_facts()
@@ -224,6 +251,8 @@ def repo_briefing(goal: str, git: GitRepo) -> str:
         + _ci_commands(files)
     )
     test_files = _test_and_check_files(files)
+    if test_files and not commands:
+        commands = ["no test command detected for the test files listed below — inspect how they expect to be run"]
     goal_files = _goal_related_files(goal, files)
     instructions = _read_text("AGENTS.md", 12000) if os.path.exists("AGENTS.md") else ""
     existing_manifests = _existing(("lute.yaml", "lute.proposed.yaml", "lute.plan.yaml", "Luteloops"))
@@ -243,16 +272,16 @@ def repo_briefing(goal: str, git: GitRepo) -> str:
         _format_list(commands),
         "",
         "## Existing Tests And Check Materials",
-        _format_list(test_files),
+        _format_list(labeled(test_files)),
         "",
         "## Goal-Related Path Hints",
-        _format_list(goal_files),
+        _format_list(labeled(goal_files)),
         "",
         "## Top-Level Entries",
         _format_list(_top_level()),
         "",
         "## Representative Repo Files",
-        _format_list(files, 160),
+        _format_list(labeled(files), 160),
     ]
     if instructions:
         sections.extend(
@@ -277,15 +306,15 @@ def build_plan_task(goal: str, skill_source: str, skill_body: str, briefing: str
 
 <critical_instructions>
 1. Write `lute.proposed.yaml` for the goal. Do not overwrite `lute.yaml`.
-2. Do not change product code while planning. Your durable output is the manifest draft; with `--keep-dag`, also write `lute.plan.yaml`.
+2. Do not change product code while planning. Your durable outputs are the manifest draft, any NEW exam materials it lists under `protected:` (check scripts, golden files — contract, not product code), and any runner config under `.lute/` the manifest requires (e.g. `cage:` for gated loops); with `--keep-dag`, also write `lute.plan.yaml`.
 3. Use the repository briefing below to choose real build/test/check commands and likely protected exam materials. If the briefing is insufficient, inspect the repo before writing.
-4. If your environment supports subagents, use them deliberately before writing YAML: scouts inspect independent repo areas and report facts; workers draft bounded milestone/check proposals for disjoint implementation slices. You must integrate and reconcile their findings yourself.
-5. First derive the implementation topology: target behavior, code surfaces, data/API contracts, dependency order, integration points, and existing or needed exams. Then compile that topology into loops.
-6. Decompose by independently verifiable functional milestones, not activities. A loop is valid only when it corresponds to an implementation state that must become true; never create loops just because "research", "implement", or "test" are phases.
-7. Prefer existing repo commands and tests. Do not invent unavailable commands, placeholder checks, `done_when: "true"`, or circular grep checks that merely detect text the worker can type.
-8. If a `done_when` depends on tests, fixtures, scripts, Makefiles, package scripts, or other exam materials the worker could edit, add `protected:` globs for those materials.
-9. Use only Lute-native YAML keys in `lute.proposed.yaml`: `loop`, `task`, `agent`, `done_when`, `budget`, `confirm`, `loops`, `check_every`, `gate`, `protected`, `parallel`, and top-level `schedules`.
-10. Leave the repository in a state where `lute lint lute.proposed.yaml` succeeds. The runner will re-check this after every attempt and feed failures back to you.
+4. If your environment supports subagents, use them deliberately before writing YAML: scouts inspect independent repo areas and report facts; workers draft bounded milestone/check proposals for disjoint implementation slices. You must integrate and reconcile their findings yourself. Skip scouts and workers when the goal is truly tiny and the briefing plus a brief direct inspection already answer every load-bearing question.
+5. Decompose by independently verifiable functional milestones, not activities. A loop is valid only when it corresponds to an implementation state that must become true; never create loops just because "research", "implement", or "test" are phases.
+6. Prefer existing repo commands and tests. Do not invent unavailable commands, placeholder checks, `done_when: "true"`, or circular grep checks that merely detect text the worker can type.
+7. Apply the skill's §4 protection rule exactly: protect exam materials the worker could edit (tests, fixtures, check scripts), but never a file whose editing is itself that loop's task — put that exam behind a protected check script or the underlying command instead.
+8. Use only Lute-native YAML keys in `lute.proposed.yaml`: `loop`, `task`, `agent`, `done_when`, `budget`, `confirm`, `loops`, `check_every`, `gate`, `protected`, `parallel`, and top-level `schedules`.
+9. Leave the repository in a state where full `lute lint lute.proposed.yaml` succeeds. The runner re-checks `lute lint --no-exec` after every attempt and feeds failures back; `--no-exec` checks syntax and command resolvability but executes nothing, so it cannot catch an uncapped watcher or a tool that resolves and then fails — run full lint before finishing.
+10. The <luteloops_skill> block below is the authoritative skill text and supersedes any other luteloops copy installed in your environment (plugin caches, ~/.codex, ~/.claude).
 </critical_instructions>
 
 <authoring_workflow>
@@ -309,5 +338,5 @@ def build_plan_task(goal: str, skill_source: str, skill_body: str, briefing: str
 {dag_instructions}
 
 <final_reminder>
-Before finishing, make the manifest lintable and self-contained. The next check is `lute lint lute.proposed.yaml`; if it fails, read the existing `lute.proposed.yaml`, repair the lint-reported issues while preserving valid structure, and rerun or mentally audit the same check.
+Before finishing, make the manifest lintable and self-contained. The next automated check is `lute lint --no-exec lute.proposed.yaml` — schema, shell syntax, and command resolvability; nothing executes. Also run full `lute lint lute.proposed.yaml` yourself to execute each exam once; for any loop with `check_every`, read the per-loop classification: a healthy watcher reports not_yet, not fail. If the gate fails, read the existing `lute.proposed.yaml`, repair the lint-reported issues while preserving valid structure, and re-audit.
 </final_reminder>"""

@@ -1,0 +1,44 @@
+# The repo takes its own exam. Every push re-runs the notch suite — the same
+# ./test.sh that lute.yaml protects — on the declared Python floor and current
+# releases, Linux and macOS. The suite is hermetic: fixture repos in a temp
+# dir, scripted agents, a PATH-shimmed crontab, no LLM calls, no TTY; the two
+# docker cage sub-checks skip themselves (with a printed reason) when the
+# runner has no daemon.
+name: exam
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  notches:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.13"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pyyaml
+      - run: ./test.sh
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - run: bash scripts/check-links.sh
