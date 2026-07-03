@@ -967,10 +967,22 @@ class WorkerPromptTests(unittest.TestCase):
         self.assertIn("The check `pytest -q` is failing", p)  # t8 substring
         self.assertIn(".lute/journal/fix-loop.md", p)  # fake_agent extracts the id here
 
+    def test_short_output_does_not_claim_an_elided_middle(self):
+        # a fully-shown short output must not carry the "middle is elided" header —
+        # that would be a false signal inviting a wasted re-run
+        p = _worker_prompt("fix it", "pytest -q", "E   assert 1 == 2")
+        self.assertNotIn("elided", p)
+
+    def test_long_output_claims_the_elided_middle(self):
+        excerpted = formatting.excerpt("\n".join(["HEAD"] + [f"n{i}" for i in range(200)] + ["TAIL"]))
+        p = _worker_prompt("fix it", "pytest -q", excerpted)
+        self.assertIn("elided", p)
+
     def test_silent_check_gets_an_exit_only_sentinel(self):
         p = _worker_prompt("make it exist", "test -f out.txt", "")
         self.assertIn("printed nothing", p.lower())
         self.assertNotIn("Last 50 lines", p)
+        self.assertNotIn("elided", p)  # nothing was truncated; do not imply it was
 
     def test_nag_is_no_longer_shouted_but_keeps_the_journal_path(self):
         p = _worker_prompt("fix", "pytest -q", "1 failed", nag=True)

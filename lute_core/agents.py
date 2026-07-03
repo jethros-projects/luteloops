@@ -76,18 +76,27 @@ class AgentRunner:
             raise UsageError(str(exc)) from exc
 
     def build_prompt(self, loop: LoopSpec, agent_command: str, tail_text: str, answer: str | None) -> str:
-        # A silent (boolean) check prints nothing on failure; name the exit-only
-        # signal rather than render an empty box under a "here is the output" label.
-        body = tail_text if tail_text.strip() else (
-            "(the check exited non-zero and printed nothing — it signals only via its "
-            "exit status; inspect the files it names, or re-run it yourself)"
-        )
-        segs = [
-            f"You are one iteration of a loop. Goal: {loop.task}",
-            f"The check `{loop.done_when.command}` is failing. An excerpt of its output "
-            f"(first and last lines; a long middle is elided — re-run the check for the "
-            f"full log):\n<check_output>\n{body}\n</check_output>",
-        ]
+        # Frame the failure honestly: a silent (boolean) check that printed nothing
+        # names its exit-only signal (no empty box); a shown-in-full output claims
+        # no elision; only a genuinely-elided excerpt says so.
+        cmd = loop.done_when.command
+        if not tail_text.strip():
+            check_seg = (
+                f"The check `{cmd}` is failing — it printed nothing, so it signals only "
+                "via its exit status; inspect the files it names, or re-run it yourself."
+            )
+        elif "lines elided" in tail_text:
+            check_seg = (
+                f"The check `{cmd}` is failing. An excerpt of its output (first and last "
+                f"lines; the middle is elided — re-run the check for the full log):\n"
+                f"<check_output>\n{tail_text}\n</check_output>"
+            )
+        else:
+            check_seg = (
+                f"The check `{cmd}` is failing. Its output:\n"
+                f"<check_output>\n{tail_text}\n</check_output>"
+            )
+        segs = [f"You are one iteration of a loop. Goal: {loop.task}", check_seg]
         if answer:
             segs.append(f"A human reviewed the last escalation and said: {answer}")
         journal = f".lute/journal/{loop.id}.md"
