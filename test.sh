@@ -4677,8 +4677,39 @@ EOF
   grep -q 'next: lute run' l.out || die "55b) lint next-command not plain: $(cat l.out)"
 }
 
+t_t56() { # self-upgrade: `lute upgrade` detects how lute was installed — pipx, a
+          #  plain pip env, or a source checkout — from where the package lives,
+          #  and names the exact upgrade command. --check prints it and runs
+          #  NOTHING (so the exam never mutates the real checkout or hits the
+          #  network). It needs no manifest, and stays byte-plain when captured.
+  mkrepo "$WORK/t56"
+
+  # The exam harness runs lute from its own source checkout, so detection must
+  # resolve to git — and --check must PRINT the command without running it.
+  rc=0; "$LUTE" upgrade --check > u.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "56) upgrade --check exited $rc: $(cat u.out)"
+  grep -q 'installed via' u.out || die "56) upgrade did not report the install method: $(cat u.out)"
+  grep -qi 'checkout' u.out || die "56) upgrade misdetected the source checkout: $(cat u.out)"
+  grep -Eq 'upgrade:.*git .*pull' u.out || die "56) upgrade --check did not name the git command: $(cat u.out)"
+  if grep -q "$(printf '\033')" u.out; then die "56) captured upgrade leaked an ANSI escape (colour must be TTY-only)"; fi
+
+  # A global maintenance verb: no lute.yaml required (run from an empty dir).
+  mkdir -p "$WORK/t56-empty" && cd "$WORK/t56-empty"
+  rc=0; "$LUTE" upgrade --check > u2.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "56) upgrade --check needs no manifest but exited $rc: $(cat u2.out)"
+
+  # per-verb --help is specific and names --check
+  "$LUTE" upgrade --help > uh.out 2>&1 || die "56) upgrade --help failed"
+  grep -q -- '--check' uh.out || die "56) upgrade --help does not mention --check: $(cat uh.out)"
+
+  # a stray positional is a usage error, not a silent no-op
+  rc=0; "$LUTE" upgrade nonsense > ub.out 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || die "56) upgrade accepted a stray positional"
+  grep -q 'usage: lute upgrade' ub.out || die "56) upgrade gave no usage for a stray arg: $(cat ub.out)"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53 t54 t55"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53 t54 t55 t56"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4736,6 +4767,7 @@ desc() {
     t53) echo "read-render    watch --snapshot and status draw the loop tree with connectors; colour is TTY-only (no ANSI when captured); ascii degrades the box-drawing" ;;
     t54) echo "mcp-server     lute mcp is a stdio JSON-RPC server exposing every verb as a tool; handshake + tools/list + a real tools/call work; unknown method errors" ;;
     t55) echo "colour-vocab   lute --help reads as grouped sections + keeps its tagline and honesty caveats; help and the lint report paint only a TTY (byte-plain when captured)" ;;
+    t56) echo "self-upgrade   lute upgrade detects the install (pipx / pip / checkout) and names the exact command; --check runs nothing; no manifest needed; plain when captured" ;;
   esac
 }
 
