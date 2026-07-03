@@ -3926,7 +3926,10 @@ EOF
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
   [ ! -f "$WORK/filter-proof" ] || die "47e) host git add executed an agent-controlled clean filter"
 
-  # --- f) protected quarantine does not copy through a symlinked ancestor.
+  # --- f) protected quarantine does not copy through a symlinked ancestor,
+  #        and stores NO live symlink at all (a stored out-of-repo symlink is
+  #        host content any dereferencing tool - GNU grep -R, tar, backup -
+  #        would read; the `find -type l` check is grep-flavor-independent).
   mkrepo "$WORK/t47-quarantine"
   mkdir -p secret "$WORK/outside-secret"
   printf 'baseline\n' > secret/fixture.txt
@@ -3948,8 +3951,36 @@ EOF
   chmod +x agent.sh
   seal
   rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
-  ! grep -R HOST-CANARY-016 .lute/quarantine >/dev/null 2>&1 || die "47f) quarantine copied a host file through a symlinked ancestor"
+  [ -z "$(find .lute/quarantine -type l 2>/dev/null)" ] || die "47f) quarantine stored a live symlink (dereferenceable to host content)"
+  ! grep -R HOST-CANARY-016 .lute/quarantine >/dev/null 2>&1 || die "47f) quarantine exposed a host file through a symlinked ancestor"
   grep -q HOST-CANARY-016 "$WORK/outside-secret/fixture.txt" || die "47f) outside canary was modified"
+
+  # --- g) same leak, direct form: a protected path the agent replaces with a
+  #        symlink straight to a host secret. Quarantine records the attempt as
+  #        inert text, never a live pointer to the target.
+  mkrepo "$WORK/t47-quarantine-direct"
+  printf 'baseline\n' > fixture.txt
+  printf 'HOST-CANARY-017\n' > "$WORK/host-secret-017"
+  cat > lute.yaml <<EOF
+loop: q
+agent: "sh ./agent.sh"
+task: point the exam at a host secret
+done_when: "false"
+protected:
+  - fixture.txt
+budget: 1 run
+EOF
+  cat > agent.sh <<EOF
+#!/bin/sh
+rm -f fixture.txt
+ln -s "$WORK/host-secret-017" fixture.txt
+EOF
+  chmod +x agent.sh
+  seal
+  rc=0; "$LUTE" run --plain > out.log 2>&1 || rc=$?
+  [ -z "$(find .lute/quarantine -type l 2>/dev/null)" ] || die "47g) quarantine stored a live symlink to a host secret"
+  ! grep -R HOST-CANARY-017 .lute/quarantine >/dev/null 2>&1 || die "47g) quarantine exposed a host secret through a direct symlink"
+  grep -q HOST-CANARY-017 "$WORK/host-secret-017" || die "47g) host secret was modified"
 
   # --- g) answer paths are loop ids, not filesystem paths.
   mkrepo "$WORK/t47-answer-path"

@@ -505,6 +505,15 @@ class Protection:
             chunks.append(("diff omitted for symlink-ancestor path(s): " + ", ".join(unsafe_paths) + "\n").encode())
         return b"\n".join(chunk for chunk in chunks if chunk)
 
+    def _record_symlink(self, dest: str, target: str) -> None:
+        # A quarantine forensic copy must never contain a live symlink: one
+        # pointing outside the repo is host content any dereferencing tool
+        # (GNU grep -R, tar, a backup) would read. Store the target as inert
+        # text in a sibling `<name>.symlink` file instead — the attempt is
+        # legible, nothing is dereferenceable (t47f/t47g).
+        self.store.ensure_dir(os.path.dirname(dest))
+        self.store.safe_write_regular(dest + ".symlink", target)
+
     def copy_current(self, paths: list[str], files_dir: str) -> list[str]:
         saved: list[str] = []
         for path in paths:
@@ -512,9 +521,8 @@ class Protection:
                 continue
             if ancestor := _symlink_ancestor(path):
                 dest = os.path.join(files_dir, ancestor)
-                self.store.ensure_dir(os.path.dirname(dest))
                 try:
-                    os.symlink(os.readlink(ancestor), dest)
+                    self._record_symlink(dest, os.readlink(ancestor))
                     saved.append(ancestor)
                 except OSError:
                     pass
@@ -523,15 +531,33 @@ class Protection:
             self.store.ensure_dir(os.path.dirname(dest))
             try:
                 if os.path.isdir(path) and not os.path.islink(path):
+                    # symlinks=False would FOLLOW inner links and copy host
+                    # bytes; copy the tree, then convert any live link the
+                    # copy carried into an inert text record.
                     shutil.copytree(path, dest, symlinks=True, dirs_exist_ok=True)
+                    self._deref_proof(dest)
                 elif os.path.islink(path):
-                    os.symlink(os.readlink(path), dest)
+                    self._record_symlink(dest, os.readlink(path))
                 else:
                     shutil.copy2(path, dest, follow_symlinks=False)
                 saved.append(path)
             except OSError:
                 pass
         return saved
+
+    def _deref_proof(self, root: str) -> None:
+        """Replace every live symlink under a copied tree with a `.symlink`
+        text record, so no dereferenceable pointer survives in quarantine."""
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            for name in dirnames + filenames:
+                full = os.path.join(dirpath, name)
+                if os.path.islink(full):
+                    try:
+                        target = os.readlink(full)
+                        os.remove(full)
+                        self.store.safe_write_regular(full + ".symlink", target)
+                    except OSError:
+                        pass
 
     def restore(self, paths: list[str], baseline: ProtectionBaseline) -> None:
         for path in paths:
