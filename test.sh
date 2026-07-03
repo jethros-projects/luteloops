@@ -4588,8 +4588,61 @@ EOF
   if grep -q '─' a.out; then die "53c) box-drawing not downgraded under ascii: $(cat a.out)"; fi
 }
 
+# ---------------------------------------------------------------- T54
+t_t54() { # mcp: `lute mcp` is a stdio JSON-RPC server exposing every verb as a
+          # tool; the handshake, tools/list, and a real tools/call all work, and
+          # each tool call shells out to the real CLI in a fresh process
+  mkrepo "$WORK/t54"
+  printf 'loop: mcp-demo\nagent: "true"\ntask: t\ndone_when: "true"\nbudget: 1 runs\n' > lute.yaml
+  seal
+  # one JSON-RPC message per line on stdin; the server replies one JSON per line.
+  {
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t54","version":"1"}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lute_inbox","arguments":{}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"nonsense/method"}'
+  } | "$LUTE" mcp > mcp.out 2>mcp.err || die "54) mcp server exited nonzero: $(cat mcp.err)"
+
+  python3 - mcp.out <<'PY' || die "54) mcp protocol assertions failed"
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+by_id = {m.get("id"): m for m in lines}
+
+# initialize: server info + capabilities + it echoes the protocol version
+init = by_id[1]["result"]
+assert init["serverInfo"]["name"] == "lute", init
+assert "tools" in init["capabilities"], init
+assert init["protocolVersion"] == "2025-11-25", init
+assert "walk-away" in init.get("instructions", ""), "instructions must teach the when-to-hand-off"
+
+# the notification produced NO response line (id is None only for the unknown-method error)
+assert 1 in by_id and 2 in by_id and 3 in by_id and 4 in by_id, sorted(by_id)
+
+# tools/list: EVERY verb is exposed as a tool, with a name + description + inputSchema
+tools = {t["name"] for t in by_id[2]["result"]["tools"]}
+expected = {"lute_once","lute_plan","lute_run","lute_lint","lute_status","lute_watch",
+            "lute_inbox","lute_answer","lute_land","lute_judge","lute_quarantine",
+            "lute_attest","lute_stop","lute_init","lute_cron"}
+missing = expected - tools
+assert not missing, f"tools/list missing verbs: {missing}"
+for t in by_id[2]["result"]["tools"]:
+    assert t["description"] and t["inputSchema"]["type"] == "object", t["name"]
+
+# tools/call lute_inbox ran the REAL cli (fresh process) and returned content
+call = by_id[3]["result"]
+assert call["content"][0]["type"] == "text" and call["content"][0]["text"], call
+assert "exit_code" in call.get("structuredContent", {}), call
+
+# an unknown METHOD is a JSON-RPC error (-32601), not a crash
+assert by_id[4]["error"]["code"] == -32601, by_id[4]
+print("ok")
+PY
+  grep -q 'nothing waiting on you\|inbox' mcp.out || die "54) lute_inbox tool did not return the real CLI output: $(cat mcp.out)"
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53 t54"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4645,6 +4698,7 @@ desc() {
     t51) echo "attestation    a closed run binds exam hash + base/head SHAs + run count + event chain into a verifiable statement; tampers and un-closed runs are refused, each with its reason" ;;
     t52) echo "worker-prompt  the failing-check output is a head+tail excerpt (top-anchored diagnostics survive); a silent check gets an exit-only sentinel; output rides in a <check_output> tag" ;;
     t53) echo "read-render    watch --snapshot and status draw the loop tree with connectors; colour is TTY-only (no ANSI when captured); ascii degrades the box-drawing" ;;
+    t54) echo "mcp-server     lute mcp is a stdio JSON-RPC server exposing every verb as a tool; handshake + tools/list + a real tools/call work; unknown method errors" ;;
   esac
 }
 
