@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.head_ref }}" }
-      - uses: jethros-projects/luteloops/contrib/action@v0.2.0
+      - uses: jethros-projects/luteloops/contrib/action@v0.2.1
         with:
           manifest: recipes/dep-major.yaml   # a recipe committed to YOUR repo
           agent: "claude -p --dangerously-skip-permissions"

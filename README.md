@@ -67,7 +67,7 @@ features, and plain CI is spelled out, both directions, in
 brew install pipx        # or: python3 -m pip install --user pipx   (skip if you already have pipx)
 pipx ensurepath          # first pipx tool on this machine only — puts ~/.local/bin on your PATH
 pipx install luteloops
-lute --version           # → lute 0.2.0
+lute --version           # → lute 0.2.1
 ```
 
 `pipx ensurepath` is a **one-time-per-machine** step, not part of installing
@@ -80,7 +80,7 @@ found, that's the fix.
 your PATH:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.1/scripts/install.sh | bash
 ```
 
 Or ask Codex/Claude Code:
@@ -93,7 +93,7 @@ Install Lute from https://github.com/jethros-projects/luteloops by running the p
 logs, and crontab entries alone — `pipx uninstall luteloops`, or for the one-paste install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.0/scripts/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jethros-projects/luteloops/v0.2.1/scripts/uninstall.sh | bash
 ```
 
 **Or run it straight from a checkout.** The executable is a tiny `lute` script,

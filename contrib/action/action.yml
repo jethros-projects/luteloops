@@ -27,7 +27,7 @@ inputs:
     description: >-
       pip requirement spec that provides the lute CLI, or "none" when a prior
       step already put lute on PATH.
-    default: "git+https://github.com/jethros-projects/luteloops.git@v0.2.0"
+    default: "git+https://github.com/jethros-projects/luteloops.git@v0.2.1"
 
 outputs:
   outcome:

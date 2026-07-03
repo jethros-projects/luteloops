@@ -7,4 +7,4 @@ supervision unless a caller passes those concerns in explicitly.
 
 # The one version source: pyproject.toml reads it at build time and the CLI
 # prints it, so the number cannot fork across surfaces (pinned by t29).
-__version__ = "0.2.0"
+__version__ = "0.2.1"
