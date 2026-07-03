@@ -4478,19 +4478,19 @@ PY
 }
 
 # ---------------------------------------------------------------- T52
-t_t52() { # worker prompt: the failing-check output is presented as a head+tail
-          # excerpt (a top-anchored diagnostic survives, not just the tail), a
-          # silent check gets an honest exit-only sentinel instead of a dangling
-          # "last N lines" claim, and the output rides inside a <check_output> tag
-  # --- a) a long output: line 1 diagnostic AND the trailing summary both reach the
-  #        prompt; the middle is elided with a marker; all wrapped in the tag; and
-  #        the t8 substring + the fake-agent journal path are preserved.
+t_t52() { # worker prompt: the failing-check output is presented as a byte-budgeted
+          # head+tail excerpt (a top-anchored diagnostic survives, not just the
+          # tail), a silent check gets an honest exit-only sentinel instead of a
+          # dangling "last N lines" claim, and output rides inside a <check_output> tag
+  # --- a) a long output (over the byte budget): line 1 diagnostic AND the trailing
+  #        summary both reach the prompt; the middle is elided with a marker; all
+  #        wrapped in the tag; and the t8 substring + fake-agent journal path survive.
   mkrepo "$WORK/t52a"
   mkdir -p checks
   cat > checks/verify.sh <<'SH'
 #!/bin/sh
 echo "HEAD-DIAGNOSTIC-MARKER: the real fix is here on line 1"
-i=1; while [ "$i" -le 120 ]; do echo "  ... noise line $i"; i=$((i+1)); done
+i=1; while [ "$i" -le 400 ]; do echo "  ... noise line $i padded xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i+1)); done
 echo "TAIL-SUMMARY-MARKER: 1 error total"
 exit 1
 SH
