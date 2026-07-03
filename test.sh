@@ -4534,8 +4534,62 @@ EOF
   if grep -qF 'Last 50 lines' "$P"; then die "52b) dangling 'Last 50 lines' claim over empty output"; fi
 }
 
+# ---------------------------------------------------------------- T53
+t_t53() { # read-only render: watch --snapshot and status draw the loop hierarchy
+          # as a connected tree; colour is a terminal-only luxury (OFF when the
+          # output is captured, so logs and machine surfaces stay plain); the
+          # ASCII fallback degrades the box-drawing instead of crashing
+  mkrepo "$WORK/t53"
+  cat > lute.yaml <<EOF
+loop: root-loop
+agent: "$FAKE"
+task: Finish the root.
+done_when: "test -f root_done"
+budget: 3 runs
+loops:
+  - loop: child-a
+    task: Finish child a.
+    done_when: "test -f a_done"
+    budget: 3 runs
+  - loop: child-b
+    task: Finish child b.
+    done_when: "test -f b_done"
+    budget: 3 runs
+EOF
+  cat > playbook.json <<'EOF'
+{ "child-a": { "1": [ {"write": {"path": "a_done", "content": "ok\n"}} ] },
+  "child-b": { "1": [ {"write": {"path": "b_done", "content": "ok\n"}} ] },
+  "root-loop": { "1": [ {"write": {"path": "root_done", "content": "ok\n"}} ] } }
+EOF
+  seal
+  rc=0; "$LUTE" run --plain > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "53) run exited $rc"
+
+  # --- a) the snapshot is a tree: nested children hang off connectors, the last
+  #        child on └─; captured output carries NO ANSI colour (an ESC byte would
+  #        corrupt logs and break every grep-based notch)
+  "$LUTE" watch --snapshot > snap.out 2>&1 || die "53a) snapshot failed: $(cat snap.out)"
+  grep -q '├─ ' snap.out || die "53a) no branch connector for the non-last child: $(cat snap.out)"
+  grep -q '└─ ' snap.out || die "53a) no end connector for the last child: $(cat snap.out)"
+  if grep -q "$(printf '\033')" snap.out; then die "53a) captured snapshot leaked an ANSI escape (colour must be TTY-only)"; fi
+  grep -Eq '✔ child-a.*1 run' snap.out || die "53a) child row lost its glyph/run count (t12 shape): $(cat snap.out)"
+
+  # --- b) status draws the same tree, keeps the ASCII [word], and stays colourless
+  #        when captured; the green root still points at land/merge
+  "$LUTE" status > st.out 2>&1 || die "53b) status failed: $(cat st.out)"
+  grep -q '└─ ' st.out || die "53b) status is not a tree: $(cat st.out)"
+  grep -q '\[done\]' st.out || die "53b) status lost the ASCII state word: $(cat st.out)"
+  if grep -q "$(printf '\033')" st.out; then die "53b) captured status leaked an ANSI escape"; fi
+  grep -q 'git merge lute/root-loop' st.out || die "53b) green root lost the land/merge pointer: $(cat st.out)"
+
+  # --- c) under a non-UTF (ascii) stdout the box-drawing degrades, never crashes
+  rc=0; LC_ALL=C PYTHONUTF8=0 PYTHONIOENCODING=ascii "$LUTE" watch --snapshot > a.out 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || die "53c) snapshot crashed under ascii stdout (exit $rc): $(cat a.out)"
+  if grep -q '─' a.out; then die "53c) box-drawing not downgraded under ascii: $(cat a.out)"; fi
+}
+
 # ---------------------------------------------------------------- runner
-ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52"
+ALL="t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15 t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31 t32 t33 t34 t35 t36 t37 t38 t39 t40 t41 t42 t43 t44 t45 t46 t47 t48 t49 t50 t51 t52 t53"
 desc() {
   case "$1" in
     t1) echo "fix-loop       a repo with one failing test closes within 5 runs" ;;
@@ -4590,6 +4644,7 @@ desc() {
     t50) echo "wedge-kit      contrib/action maps lute's exit contract onto a CI job; the recipe shape closes hermetically; shipped recipes stay schema-valid" ;;
     t51) echo "attestation    a closed run binds exam hash + base/head SHAs + run count + event chain into a verifiable statement; tampers and un-closed runs are refused, each with its reason" ;;
     t52) echo "worker-prompt  the failing-check output is a head+tail excerpt (top-anchored diagnostics survive); a silent check gets an exit-only sentinel; output rides in a <check_output> tag" ;;
+    t53) echo "read-render    watch --snapshot and status draw the loop tree with connectors; colour is TTY-only (no ANSI when captured); ascii degrades the box-drawing" ;;
   esac
 }
 

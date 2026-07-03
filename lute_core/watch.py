@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 
+from . import render
 from .cards import CardService
 from .domain import LoopSpec
 from .events import GLYPH_WORD, output_line, replay_events
@@ -36,22 +37,25 @@ def noise_filter(text: str, maxblock: int = 64) -> str:
     return "".join(out)
 
 
-def loop_row(depth: int, loop: LoopSpec, state: dict, root: LoopSpec) -> str:
-    loop_state = state["loops"].get(str(loop.id), {})
-    mark, runs = loop_state.get("mark", "◌"), loop_state.get("runs", 0)
-    tag = " (root)" if loop is root and loop.children else ""
-    if loop_state.get("active"):
-        info = f"run {loop_state.get('run')}{'/' + str(loop_state['cap']) if loop_state.get('cap') else ''} · done_when: {loop.done_when.command[:40]}"
-    elif runs:
-        info = f"{runs} run{'s' if runs != 1 else ''} · {human(loop_state.get('secs', 0))}"
-    else:
-        info = ""
-    gloss = f" [{GLYPH_WORD[mark]}]" if mark in GLYPH_WORD else ""
-    return f"{'  ' * depth}{mark} {loop.id}{tag}{gloss}" + (f"    {info}" if info else "")
+def snapshot_cell(state: dict) -> "callable":
+    def cell(loop: LoopSpec) -> tuple[str, str, str]:
+        loop_state = state["loops"].get(str(loop.id), {})
+        mark = loop_state.get("mark", "◌")
+        runs = loop_state.get("runs", 0)
+        if loop_state.get("active"):
+            cap = loop_state.get("cap")
+            meta = f"run {loop_state.get('run')}" + (f"/{cap}" if cap else "")
+        elif runs:
+            meta = f"{runs} run{'s' if runs != 1 else ''} · {human(loop_state.get('secs', 0))}"
+        else:
+            meta = ""
+        return mark, GLYPH_WORD.get(mark, ""), meta
+
+    return cell
 
 
 def snapshot_lines(root: LoopSpec, state: dict) -> list[str]:
-    return [loop_row(depth, loop, state, root) for depth, loop in root.flatten()]
+    return render.tree_lines(root, snapshot_cell(state))
 
 
 def state_json(root: LoopSpec, state: dict, cards: CardService) -> dict:
@@ -92,9 +96,16 @@ def state_json(root: LoopSpec, state: dict, cards: CardService) -> dict:
 
 def render_snapshot(root: LoopSpec, events_path: str) -> None:
     state = replay_events(events_path)
-    print(f"lute snapshot: replayed from events (free; may be stale, last event {state['last'] or 'none'})")
+    output_line(render.rule(
+        f"lute snapshot · replayed from events, free but may be stale · "
+        f"last event {state['last'] or 'none'}"
+    ))
     for line in snapshot_lines(root, state):
         output_line(line)
+    closed = sum(1 for ls in state["loops"].values() if ls.get("mark") == "✔")
+    total = len(root.flatten())
+    if state.get("ended") and closed == total and total:
+        output_line(render.rule(f"all loops closed — land it: lute land  (or git merge {state.get('branch') or ('lute/' + str(root.id))})"))
 
 
 def render_json(root: LoopSpec, events_path: str, cards: CardService) -> None:
