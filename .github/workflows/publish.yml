@@ -1,0 +1,59 @@
+# Ship on a version tag. Pushing `v0.2.0` (a tag whose name matches
+# lute_core.__version__) runs the exam once more, publishes the sdist + wheel to
+# PyPI via trusted publishing (OIDC — no token; matched to the pending publisher:
+# repo jethros-projects/luteloops, workflow publish.yml, environment pypi), then
+# cuts the GitHub release. A red tag never ships: the guard gates both later jobs.
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyyaml
+      - name: the notch suite is green
+        run: ./test.sh
+      - name: the tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(python3 -c 'import lute_core; print(lute_core.__version__)')"
+          echo "tag=$tag package=$pkg"
+          [ "$tag" = "$pkg" ] || { echo "::error::tag $tag does not match lute_core.__version__ $pkg"; exit 1; }
+
+  pypi:
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC — the whole point of trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
